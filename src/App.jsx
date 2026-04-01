@@ -205,7 +205,6 @@ function LoginScreen({ onLogin }) {
           </button>
 
           <div style={{marginTop:18,padding:"10px 12px",background:"rgba(245,158,11,.04)",border:"1px solid rgba(245,158,11,.1)",borderRadius:8,fontSize:11,color:"#64748b",textAlign:"center"}}>
-            Default credentials: <b style={{color:"#94a3b8"}}>admin</b> / <b style={{color:"#94a3b8"}}>admin123</b><br/>
             <span style={{fontSize:10,color:"#475569"}}>Change password in Settings after login</span>
           </div>
         </div>
