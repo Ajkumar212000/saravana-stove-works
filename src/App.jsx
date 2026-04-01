@@ -172,7 +172,7 @@ function LoginScreen({ onLogin }) {
         {/* Brand */}
         <div style={{textAlign:"center",marginBottom:32}}>
           <div style={{display:"inline-flex",width:68,height:68,background:"linear-gradient(135deg,#f59e0b,#92400e)",borderRadius:20,alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:900,color:"#0d1117",marginBottom:16,boxShadow:"0 0 48px rgba(245,158,11,.25)"}}>S</div>
-          <div style={{fontSize:38,fontWeight:900,letterSpacing:8,color:"#f0f6ff",lineHeight:1}}>STOW</div>
+          <div style={{fontSize:38,fontWeight:900,letterSpacing:8,color:"#f0f6ff",lineHeight:1}}>Saravana Stove Works</div>
           <div style={{color:"#475569",fontSize:11,letterSpacing:3,marginTop:8}}>WHOLESALE & RETAIL</div>
         </div>
 
@@ -303,7 +303,7 @@ export default function App() {
     <div style={C.splash}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       <div style={{textAlign:"center"}}>
-        <div style={C.logo}>STOW</div>
+        <div style={C.logo}>Stove Works</div>
         <div style={{color:"#64748b",fontSize:12,letterSpacing:3,marginBottom:20}}>Wholesale & Retail</div>
         {err
           ? <div style={{color:"#f87171",fontSize:13,maxWidth:400,padding:"0 20px"}}>{err}</div>
@@ -334,7 +334,7 @@ export default function App() {
         <div style={C.brand}>
           <div style={C.bIcon}>S</div>
           <div>
-            <div style={C.bName}>STOW</div>
+            <div style={C.bName}>Stove Works</div>
             <div style={C.bSub}>Wholesale & Retail</div>
           </div>
         </div>
@@ -666,7 +666,7 @@ function Receipt({ rcpt, products, onClose }) {
       {/* ── Receipt body – white card ── */}
       <div id="stow-receipt-body" style={{background:"#fff",color:"#111",padding:24,borderRadius:10,fontFamily:"'Courier New',monospace",fontSize:12}}>
         <div style={{textAlign:"center",marginBottom:14}}>
-          <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>STOW</div>
+          <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>Stove Works</div>
           <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
           <div style={{borderTop:"1px dashed #ccc",marginTop:8,paddingTop:8,fontSize:10,color:"#777"}}>
             Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
