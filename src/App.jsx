@@ -42,14 +42,33 @@ const fmtDate = d  => { if (!d) return "—"; try { return new Date(d).toLocaleD
 const toISO   = d  => { if (!d) return today(); if (d instanceof Date) return d.toISOString().slice(0,10); if (typeof d==="number") return new Date(Math.round((d-25569)*86400*1000)).toISOString().slice(0,10); return String(d).slice(0,10); };
 
 /* ══════════════════════════════════════════════════════════════
-   Login helpers (localStorage)
+   Auth helpers — credentials stored in Supabase settings table
+   Row: { id:"credentials", username:"admin", password:"admin123" }
+   Session (who is logged in on this device) still uses localStorage
+   so the page survives a refresh without hitting the DB again.
 ══════════════════════════════════════════════════════════════ */
-const AUTH_KEY = "stow_auth";
-function getStoredCreds() {
-  try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || {username:"admin",password:"admin123"}; }
-  catch { return {username:"admin",password:"admin123"}; }
+
+// Fetch credentials from Supabase; seed defaults if row doesn't exist yet
+async function getDBCreds() {
+  try {
+    const rows = await sb.getAll("settings", "&id=eq.credentials");
+    if (rows && rows.length > 0) return rows[0];
+    // First-run: create the default credentials row
+    const def = { id:"credentials", username:"admin", password:"admin123" };
+    await sb.upsert("settings", def);
+    return def;
+  } catch {
+    // If settings table doesn't exist yet fall back to local default
+    return { id:"credentials", username:"admin", password:"admin123" };
+  }
 }
-function saveStoredCreds(c) { localStorage.setItem(AUTH_KEY, JSON.stringify(c)); }
+
+// Save updated credentials back to Supabase
+async function saveDBCreds(c) {
+  await sb.upsert("settings", { id:"credentials", username:c.username, password:c.password });
+}
+
+// Session lives in localStorage (device-only, no sensitive data stored)
 function isLoggedIn() { return !!localStorage.getItem("stow_session"); }
 function setSession(u) { localStorage.setItem("stow_session", u); }
 function clearSession() { localStorage.removeItem("stow_session"); }
@@ -140,6 +159,27 @@ function Toast({ t }) {
   );
 }
 
+/* ── Mobile detection ── */
+function useIsMobile() {
+  const [m, setM] = useState(typeof window!=="undefined"&&window.innerWidth<769);
+  useEffect(()=>{ const h=()=>setM(window.innerWidth<769); window.addEventListener("resize",h); return ()=>window.removeEventListener("resize",h); },[]);
+  return m;
+}
+
+/* ── Bottom Mobile NavBar ── */
+function BottomNav({ tab, setTab, TABS }) {
+  return (
+    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#080c14",borderTop:"1px solid #1a2235",zIndex:300,display:"flex",overflowX:"auto",WebkitOverflowScrolling:"touch"}} className="no-print">
+      {TABS.map(t=>(
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:"0 0 auto",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"8px 12px",background:"none",border:"none",color:tab===t.id?"#f59e0b":"#64748b",cursor:"pointer",fontSize:9,fontWeight:tab===t.id?700:500,minWidth:60}}>
+          <I n={t.n} s={20}/>
+          <span style={{whiteSpace:"nowrap"}}>{t.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════
    LOGIN SCREEN
 ══════════════════════════════════════════════════════════════ */
@@ -150,18 +190,20 @@ function LoginScreen({ onLogin }) {
   const [busy,  setBusy]  = useState(false);
   const [showP, setShowP] = useState(false);
 
-  const doLogin = () => {
+  const doLogin = async () => {
     if (!user.trim()||!pass) return setErr("Please enter both username and password.");
     setBusy(true); setErr("");
-    const creds = getStoredCreds();
-    setTimeout(()=>{  // tiny delay for UX feel
+    try {
+      const creds = await getDBCreds();   // fetch from Supabase
       if (user.trim()===creds.username && pass===creds.password) {
         setSession(user.trim()); onLogin(user.trim());
       } else {
         setErr("Incorrect username or password.");
       }
-      setBusy(false);
-    }, 400);
+    } catch(e) {
+      setErr("Could not connect to database: " + e.message);
+    }
+    setBusy(false);
   };
 
   return (
@@ -172,7 +214,7 @@ function LoginScreen({ onLogin }) {
         {/* Brand */}
         <div style={{textAlign:"center",marginBottom:32}}>
           <div style={{display:"inline-flex",width:68,height:68,background:"linear-gradient(135deg,#f59e0b,#92400e)",borderRadius:20,alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:900,color:"#0d1117",marginBottom:16,boxShadow:"0 0 48px rgba(245,158,11,.25)"}}>S</div>
-          <div style={{fontSize:38,fontWeight:900,letterSpacing:8,color:"#f0f6ff",lineHeight:1}}>Saravana Stove Works</div>
+          <div style={{fontSize:38,fontWeight:900,letterSpacing:8,color:"#f0f6ff",lineHeight:1}}>SARAVANAN STOVE WORKS</div>
           <div style={{color:"#475569",fontSize:11,letterSpacing:3,marginTop:8}}>WHOLESALE & RETAIL</div>
         </div>
 
@@ -205,6 +247,7 @@ function LoginScreen({ onLogin }) {
           </button>
 
           <div style={{marginTop:18,padding:"10px 12px",background:"rgba(245,158,11,.04)",border:"1px solid rgba(245,158,11,.1)",borderRadius:8,fontSize:11,color:"#64748b",textAlign:"center"}}>
+            {/* Default credentials: <b style={{color:"#94a3b8"}}>admin</b> / <b style={{color:"#94a3b8"}}>admin123</b><br/> */}
             <span style={{fontSize:10,color:"#475569"}}>Change password in Settings after login</span>
           </div>
         </div>
@@ -221,14 +264,18 @@ function ChangePwModal({ onClose }) {
   const [err, setErr] = useState("");
   const [ok, setOk] = useState(false);
 
-  const save = () => {
-    const creds = getStoredCreds();
-    if (f.old !== creds.password) return setErr("Current password is incorrect.");
+  const save = async () => {
     if (!f.n1) return setErr("New password cannot be empty.");
     if (f.n1 !== f.n2) return setErr("New passwords do not match.");
     if (f.n1.length < 4) return setErr("Password must be at least 4 characters.");
-    saveStoredCreds({...creds, password:f.n1});
-    setOk(true); setErr("");
+    try {
+      const creds = await getDBCreds();            // fetch from Supabase
+      if (f.old !== creds.password) return setErr("Current password is incorrect.");
+      await saveDBCreds({...creds, password:f.n1}); // save back to Supabase
+      setOk(true); setErr("");
+    } catch(e) {
+      setErr("Could not save: " + e.message);
+    }
   };
 
   return (
@@ -274,6 +321,7 @@ export default function App() {
   const [ready,  setReady]  = useState(false);
   const [err,    setErr]    = useState("");
   const [showPw, setShowPw] = useState(false);
+  const isMobile = useIsMobile();
 
   const refresh = useCallback(async () => {
     try {
@@ -302,7 +350,7 @@ export default function App() {
     <div style={C.splash}>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       <div style={{textAlign:"center"}}>
-        <div style={C.logo}>Stove Works</div>
+        <div style={C.logo}>SARAVANA STOVE WORKS</div>
         <div style={{color:"#64748b",fontSize:12,letterSpacing:3,marginBottom:20}}>Wholesale & Retail</div>
         {err
           ? <div style={{color:"#f87171",fontSize:13,maxWidth:400,padding:"0 20px"}}>{err}</div>
@@ -328,12 +376,12 @@ export default function App() {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}} body{margin:0} *{box-sizing:border-box} input:focus,select:focus{border-color:#f59e0b!important;outline:none} @media print{.no-print{display:none!important}}`}</style>
       {showPw && <ChangePwModal onClose={()=>setShowPw(false)}/>}
 
-      {/* ── Sidebar ── */}
-      <aside style={C.sb} className="no-print">
+      {/* ── Sidebar (desktop only) ── */}
+      {!isMobile && <aside style={C.sb} className="no-print">
         <div style={C.brand}>
           <div style={C.bIcon}>S</div>
           <div>
-            <div style={C.bName}>Stove Works</div>
+            <div style={C.bName}>STOVE WORKS</div>
             <div style={C.bSub}>Wholesale & Retail</div>
           </div>
         </div>
@@ -356,11 +404,11 @@ export default function App() {
             <I n="logout" s={12}/> Logout
           </button>
         </div>
-      </aside>
+      </aside>}
 
       {/* ── Main ── */}
-      <main style={C.main}>
-        {tab==="dashboard" && <Dashboard  data={data}/>}
+      <main style={{...C.main, padding:isMobile?"14px 10px 80px":"22px 28px"}}>
+        {tab==="dashboard" && <Dashboard  data={data} isMobile={isMobile}/>}
         {tab==="inventory" && <Inventory  data={data} refresh={refresh}/>}
         {tab==="sales"     && <Sales      data={data} refresh={refresh} setTab={setTab}/>}
         {tab==="customers" && <Customers  data={data} refresh={refresh}/>}
@@ -369,6 +417,7 @@ export default function App() {
         {tab==="reports"   && <Reports    data={data} refresh={refresh}/>}
         {tab==="import"    && <ImportData data={data} refresh={refresh}/>}
       </main>
+      {isMobile && <BottomNav tab={tab} setTab={setTab} TABS={TABS}/>}
     </div>
   );
 }
@@ -376,7 +425,7 @@ export default function App() {
 /* ══════════════════════════════════════════════════════════════
    Dashboard
 ══════════════════════════════════════════════════════════════ */
-function Dashboard({ data }) {
+function Dashboard({ data, isMobile=false }) {
   const { products, customers, sales, expenses } = data;
   const tSales  = sales.filter(s=>s.date===today());
   const tRev    = tSales.reduce((a,s)=>a+s.total,0);
@@ -389,7 +438,7 @@ function Dashboard({ data }) {
   return (
     <div style={C.pg}>
       <h1 style={C.h1}>Dashboard</h1>
-      <div style={C.g4}>
+      <div style={{...C.g4,gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)"}}>
         <StatC label="Today Revenue"    val={fmt(tRev)}           sub={`${tSales.length} sales today`}                     acc="#f59e0b"/>
         <StatC label="Today Net Profit" val={fmt(tProfit-tExp)}   sub="After expenses"                                     acc="#10b981"/>
         <StatC label="Total Debt"       val={fmt(totDebt)}        sub={`${customers.filter(c=>c.debt>0).length} customers`} acc="#ef4444"/>
@@ -403,7 +452,7 @@ function Dashboard({ data }) {
         </div>
       )}
 
-      <div style={C.two}>
+      <div style={{...C.two,gridTemplateColumns:isMobile?"1fr":"1fr 1fr"}}>
         <div style={C.card}>
           <ST>Recent Sales</ST>
           {recent.length===0 ? <MT text="No sales yet"/> : recent.map(s=>{
@@ -446,7 +495,7 @@ function Dashboard({ data }) {
    Inventory
 ══════════════════════════════════════════════════════════════ */
 function Inventory({ data, refresh }) {
-  const blank = {name:"",category:"",buy_price:"",sell_price:"",stock:"",unit:"pcs"};
+  const blank = {name:"",category:"",buy_price:"",sell_price:"",gst:0,stock:"",unit:"pcs"};
   const [form, setForm] = useState(blank);
   const [eid,  setEid]  = useState(null);
   const [show, setShow] = useState(false);
@@ -458,7 +507,7 @@ function Inventory({ data, refresh }) {
     if (!form.name||form.sell_price===""||form.stock==="") return toast("Fill required fields","err");
     setBusy(true);
     try {
-      await sb.upsert("products",{...form,id:eid||uid(),buy_price:+form.buy_price||0,sell_price:+form.sell_price,stock:+form.stock});
+      await sb.upsert("products",{...form,id:eid||uid(),buy_price:+form.buy_price||0,sell_price:+form.sell_price,gst:+form.gst||0,stock:+form.stock});
       await refresh(); setForm(blank); setEid(null); setShow(false);
       toast(eid?"Product updated ✓":"Product added ✓");
     } finally { setBusy(false); }
@@ -469,7 +518,7 @@ function Inventory({ data, refresh }) {
     await sb.del("products",id); await refresh(); toast("Deleted");
   };
 
-  const startEdit = p => { setForm({name:p.name,category:p.category||"",buy_price:p.buy_price,sell_price:p.sell_price,stock:p.stock,unit:p.unit||"pcs"}); setEid(p.id); setShow(true); };
+  const startEdit = p => { setForm({name:p.name,category:p.category||"",buy_price:p.buy_price,sell_price:p.sell_price,gst:p.gst||0,stock:p.stock,unit:p.unit||"pcs"}); setEid(p.id); setShow(true); };
 
   const filtered = data.products.filter(p=>
     p.name?.toLowerCase().includes(srch.toLowerCase())||(p.category||"").toLowerCase().includes(srch.toLowerCase())
@@ -492,6 +541,12 @@ function Inventory({ data, refresh }) {
             <Fld label="Category"       value={form.category}  onChange={v=>setForm(f=>({...f,category:v}))} ph="Burner, Lighter…"/>
             <Fld label="Buy Price ₹"   type="number" value={form.buy_price}  onChange={v=>setForm(f=>({...f,buy_price:v}))}/>
             <Fld label="Sell Price ₹ *" type="number" value={form.sell_price} onChange={v=>setForm(f=>({...f,sell_price:v}))}/>
+            <div>
+              <label style={C.lbl}>GST %</label>
+              <select style={C.inp} value={form.gst} onChange={e=>setForm(f=>({...f,gst:+e.target.value}))}>
+                {[0,5,12,18,28].map(g=><option key={g} value={g}>{g}%</option>)}
+              </select>
+            </div>
             <Fld label="Stock *"        type="number" value={form.stock}      onChange={v=>setForm(f=>({...f,stock:v}))}/>
             <div>
               <label style={C.lbl}>Unit</label>
@@ -508,15 +563,16 @@ function Inventory({ data, refresh }) {
       )}
 
       <div style={C.tbl}>
-        <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 90px 90px 70px 90px 70px"}}>
-          <span>Product</span><span>Category</span><span>Buy ₹</span><span>Sell ₹</span><span>Margin</span><span>Stock</span><span>Actions</span>
+        <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px"}}>
+          <span>Product</span><span>Category</span><span>Buy ₹</span><span>Sell ₹</span><span>GST</span><span>Margin</span><span>Stock</span><span>Actions</span>
         </div>
         {filtered.length===0?<MT text="No products"/>:filtered.map(p=>(
-          <div key={p.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 90px 90px 70px 90px 70px",...(p.stock<=5&&p.sell_price>0?{background:"rgba(239,68,68,.04)"}:{})}}>
+          <div key={p.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px",...(p.stock<=5&&p.sell_price>0?{background:"rgba(239,68,68,.04)"}:{})}}>
             <span style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{p.name}</span>
             <span style={{color:"#94a3b8",fontSize:12}}>{p.category||"—"}</span>
             <span style={{fontSize:13,color:"#cbd5e1"}}>{fmt(p.buy_price)}</span>
             <span style={{color:"#f59e0b",fontWeight:600,fontSize:13}}>{fmt(p.sell_price)}</span>
+            <span style={{color:(p.gst||0)>0?"#fbbf24":"#475569",fontSize:12,fontWeight:600}}>{p.gst||0}%</span>
             <span style={{color:"#34d399",fontSize:12}}>{p.buy_price>0?`${(((p.sell_price-p.buy_price)/p.buy_price)*100).toFixed(0)}%`:"—"}</span>
             <span style={{color:p.stock<=5&&p.sell_price>0?"#f87171":"#e2e8f0",fontWeight:600,fontSize:13}}>{p.stock} {p.unit}</span>
             <span style={{display:"flex",gap:5}}>
@@ -534,9 +590,10 @@ function Inventory({ data, refresh }) {
    New Sale
 ══════════════════════════════════════════════════════════════ */
 function Sales({ data, refresh, setTab }) {
+  const isMobile = useIsMobile();
   const [custId, setCustId] = useState("");
   const [walkIn, setWalkIn] = useState("");
-  const [items,  setItems]  = useState([{productId:"",qty:1,price:0}]);
+  const [items,  setItems]  = useState([{productId:"",pname:"",qty:1,price:0}]);
   const [paid,   setPaid]   = useState("");
   const [note,   setNote]   = useState("");
   const [rcpt,   setRcpt]   = useState(null);
@@ -548,11 +605,29 @@ function Sales({ data, refresh, setTab }) {
   const paidN  = parseFloat(paid)||0;
   const bal    = total-paidN;
 
-  const setItem = (idx,f,v) => setItems(prev=>{
-    const n=[...prev]; n[idx]={...n[idx],[f]:v};
-    if (f==="productId"){const p=data.products.find(x=>x.id===v);if(p)n[idx].price=p.sell_price;}
+  const setItemField = (idx,field,val) => setItems(prev=>{
+    const n=[...prev]; n[idx]={...n[idx],[field]:val}; return n;
+  });
+
+  const pickProduct = (idx,name) => setItems(prev=>{
+    const n=[...prev]; n[idx]={...n[idx],pname:name};
+    const p=data.products.find(x=>x.name.toLowerCase()===name.toLowerCase());
+    if(p){ n[idx].productId=p.id; n[idx].price=p.sell_price; }
+    else { n[idx].productId=""; }
     return n;
   });
+
+  const doPrint = (r) => {
+    const content=document.getElementById("stow-rcpt-inline");
+    if(!content) return;
+    const w=window.open("","_blank","width=420,height=700");
+    w.document.write(`<!DOCTYPE html><html><head><title>Bill #${r.id.slice(-8).toUpperCase()}</title>
+      <style>body{margin:0;padding:20px;font-family:'Courier New',monospace;background:#fff;color:#111}
+      table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:3px 0}
+      @media print{button{display:none}}</style></head>
+      <body>${content.innerHTML}<script>window.onload=()=>{window.print()}<\/script></body></html>`);
+    w.document.close();
+  };
 
   const submit = async () => {
     const valid=items.filter(i=>i.productId&&i.qty>0);
@@ -572,63 +647,142 @@ function Sales({ data, refresh, setTab }) {
       await refresh();
       const cust=data.customers.find(c=>c.id===custId);
       setRcpt({...sale,customerName:cust?.name||walkIn||"Walk-in"});
-      setItems([{productId:"",qty:1,price:0}]); setCustId(""); setWalkIn(""); setPaid(""); setNote("");
+      setItems([{productId:"",pname:"",qty:1,price:0}]); setCustId(""); setWalkIn(""); setPaid(""); setNote("");
     } catch(e){ toast(e.message,"err"); }
     finally { setBusy(false); }
   };
-
-  if (rcpt) return <Receipt rcpt={rcpt} products={data.products} onClose={()=>setRcpt(null)}/>;
 
   return (
     <div style={C.pg}>
       <Toast t={t}/>
       <h1 style={C.h1}>New Sale</h1>
-      <div style={C.two}>
-        <div style={C.card}>
-          <ST>Customer</ST>
-          <div style={{marginBottom:10}}>
-            <label style={C.lbl}>Existing Customer / Dealer</label>
-            <select style={C.inp} value={custId} onChange={e=>{setCustId(e.target.value);setWalkIn("");}}>
-              <option value="">— Walk-in / Select —</option>
-              {data.customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.debt>0?` ⚠ Debt:${fmt(c.debt)}`:""}</option>)}
-            </select>
-          </div>
-          {!custId&&<Fld label="Walk-in Name (optional)" value={walkIn} onChange={setWalkIn}/>}
 
-          <ST style={{marginTop:14}}>Items</ST>
-          {items.map((item,idx)=>(
-            <div key={idx} style={{display:"grid",gridTemplateColumns:"1fr 55px 80px 28px",gap:6,marginBottom:8}}>
-              <select style={C.inp} value={item.productId} onChange={e=>setItem(idx,"productId",e.target.value)}>
-                <option value="">— Product —</option>
-                {data.products.map(p=><option key={p.id} value={p.id}>{p.name} ({p.stock} left)</option>)}
-              </select>
-              <input style={C.inp} type="number" min="1" value={item.qty} onChange={e=>setItem(idx,"qty",+e.target.value)} placeholder="Qty"/>
-              <input style={C.inp} type="number" value={item.price} onChange={e=>setItem(idx,"price",+e.target.value)} placeholder="₹"/>
-              <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>setItems(p=>p.filter((_,i)=>i!==idx))}><I n="close" s={12}/></button>
+      {/* ── After confirm: inline receipt with Print + New Sale side by side ── */}
+      {rcpt&&(
+        <div style={{marginBottom:20}}>
+          <div style={{...C.card,borderTop:"3px solid #10b981",marginBottom:12,padding:"14px 18px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <div style={{color:"#34d399",fontWeight:700,fontSize:15}}>✓ Sale Confirmed!</div>
+              <div style={{color:"#f59e0b",fontWeight:800,fontSize:20}}>{fmt(rcpt.total)}</div>
             </div>
-          ))}
-          <button style={C.btnG} onClick={()=>setItems(p=>[...p,{productId:"",qty:1,price:0}])}><I n="plus" s={13}/> Add Item</button>
-          <div style={{marginTop:10}}><Fld label="Note (optional)" value={note} onChange={setNote}/></div>
-        </div>
-
-        <div>
-          <div style={{...C.card,marginBottom:12}}>
-            <ST>Summary</ST>
-            <SRow l="Total"        v={fmt(total)}  c="#f59e0b" b/>
-            <SRow l="Gross Profit" v={fmt(profit)} c="#34d399"/>
-            <div style={{borderTop:"1px solid #1e293b",margin:"10px 0"}}/>
-            <Fld label="Amount Paid ₹" type="number" value={paid} onChange={setPaid} ph={String(total)}/>
-            <SRow l="Balance Due" v={fmt(bal)} c={bal>0?"#f87171":"#34d399"} b/>
-            {bal>0&&custId&&<div style={{fontSize:11,color:"#f59e0b",marginTop:4,padding:"5px 8px",background:"rgba(245,158,11,.06)",borderRadius:5}}>→ Balance added to customer debt in Supabase</div>}
+            <div style={{color:"#94a3b8",fontSize:13}}>{rcpt.customerName} · {(rcpt.items||[]).length} item(s) · {fmtDate(rcpt.date)}</div>
           </div>
-          <button style={{...C.btnP,width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14}} onClick={submit} disabled={busy}>
-            <I n="check" s={16}/> {busy?"Saving…":"Confirm Sale"}
-          </button>
+
+          {/* Inline receipt — white card for printing */}
+          <div id="stow-rcpt-inline" style={{background:"#fff",color:"#111",padding:20,borderRadius:10,fontFamily:"'Courier New',monospace",fontSize:12,maxWidth:360,marginBottom:14}}>
+            <div style={{textAlign:"center",marginBottom:12}}>
+              <div style={{fontSize:20,fontWeight:900,letterSpacing:5}}>Stove Works</div>
+              <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
+              <div style={{borderTop:"1px dashed #ccc",marginTop:6,paddingTop:6,fontSize:10,color:"#777"}}>
+                Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
+              </div>
+            </div>
+            <div style={{fontWeight:700,marginBottom:8,fontSize:13}}>{rcpt.customerName}</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{borderBottom:"1px dashed #ccc"}}>
+                <th style={{textAlign:"left",padding:"3px 0"}}>Item</th>
+                <th style={{textAlign:"center"}}>Qty</th>
+                <th style={{textAlign:"right"}}>Rate</th>
+                <th style={{textAlign:"right"}}>Amt</th>
+              </tr></thead>
+              <tbody>
+                {(rcpt.items||[]).map((item,i)=>{
+                  const p=data.products.find(x=>x.id===item.productId);
+                  return (
+                    <tr key={i} style={{borderBottom:"1px dashed #eee"}}>
+                      <td style={{padding:"3px 0"}}>{p?.name||"?"}</td>
+                      <td style={{textAlign:"center"}}>{item.qty}</td>
+                      <td style={{textAlign:"right"}}>{fmt(item.price)}</td>
+                      <td style={{textAlign:"right",fontWeight:600}}>{fmt(item.price*item.qty)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{marginTop:10,borderTop:"1px dashed #ccc",paddingTop:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:14}}><span>Total</span><span>{fmt(rcpt.total)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",color:"#555",fontSize:13}}><span>Paid</span><span>{fmt(rcpt.paid)}</span></div>
+              {rcpt.total-rcpt.paid>0&&<div style={{display:"flex",justifyContent:"space-between",color:"red",fontWeight:700,fontSize:13}}><span>Balance Due</span><span>{fmt(rcpt.total-rcpt.paid)}</span></div>}
+            </div>
+            {rcpt.note&&<div style={{marginTop:8,fontSize:11,color:"#777"}}>Note: {rcpt.note}</div>}
+            <div style={{textAlign:"center",marginTop:10,fontSize:10,color:"#aaa",borderTop:"1px dashed #ccc",paddingTop:8}}>Thank you! Visit again.</div>
+          </div>
+
+          {/* Print Bill  |  New Sale — side by side */}
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <button style={{...C.btnP,padding:"11px 24px",fontSize:14}} onClick={()=>doPrint(rcpt)}>
+              <I n="print" s={15}/> Print Bill
+            </button>
+            <button style={{...C.btnG,padding:"11px 22px",fontSize:14}} onClick={()=>setRcpt(null)}>
+              <I n="plus" s={15}/> New Sale
+            </button>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ── Sale form (hidden while receipt is showing) ── */}
+      {!rcpt&&(
+        <div style={{...C.two,gridTemplateColumns:isMobile?"1fr":"1fr 1fr"}}>
+          <div style={C.card}>
+            <ST>Customer</ST>
+            <div style={{marginBottom:10}}>
+              <label style={C.lbl}>Existing Customer / Dealer</label>
+              <select style={C.inp} value={custId} onChange={e=>{setCustId(e.target.value);setWalkIn("");}}>
+                <option value="">— Walk-in / Select —</option>
+                {data.customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.debt>0?` ⚠ Debt:${fmt(c.debt)}`:""}</option>)}
+              </select>
+            </div>
+            {!custId&&<Fld label="Walk-in Name (optional)" value={walkIn} onChange={setWalkIn}/>}
+
+            <ST style={{marginTop:14}}>Items</ST>
+            {items.map((item,idx)=>(
+              <div key={idx} style={{marginBottom:8}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 55px 80px 28px",gap:6}}>
+                  <div>
+                    <input style={C.inp} list={`pl-${idx}`} value={item.pname}
+                      placeholder="Search product…" onChange={e=>pickProduct(idx,e.target.value)}/>
+                    <datalist id={`pl-${idx}`}>
+                      {data.products.map(p=><option key={p.id} value={p.name}/>)}
+                    </datalist>
+                  </div>
+                  <input style={C.inp} type="number" min="1" value={item.qty} onChange={e=>setItemField(idx,"qty",+e.target.value)} placeholder="Qty"/>
+                  <input style={C.inp} type="number" value={item.price} onChange={e=>setItemField(idx,"price",+e.target.value)} placeholder="₹"/>
+                  <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>setItems(p=>p.filter((_,i)=>i!==idx))}><I n="close" s={12}/></button>
+                </div>
+                {item.productId&&(
+                  <div style={{fontSize:11,color:"#475569",marginTop:3,paddingLeft:2}}>
+                    {data.products.find(p=>p.id===item.productId)?.stock} left in stock
+                    {(data.products.find(p=>p.id===item.productId)?.gst||0)>0&&
+                      <span style={{color:"#fbbf24",marginLeft:8}}>GST {data.products.find(p=>p.id===item.productId)?.gst}%</span>
+                    }
+                  </div>
+                )}
+              </div>
+            ))}
+            <button style={C.btnG} onClick={()=>setItems(p=>[...p,{productId:"",pname:"",qty:1,price:0}])}><I n="plus" s={13}/> Add Item</button>
+            <div style={{marginTop:10}}><Fld label="Note (optional)" value={note} onChange={setNote}/></div>
+          </div>
+
+          <div>
+            <div style={{...C.card,marginBottom:12}}>
+              <ST>Summary</ST>
+              <SRow l="Total"        v={fmt(total)}  c="#f59e0b" b/>
+              <SRow l="Gross Profit" v={fmt(profit)} c="#34d399"/>
+              <div style={{borderTop:"1px solid #1e293b",margin:"10px 0"}}/>
+              <Fld label="Amount Paid ₹" type="number" value={paid} onChange={setPaid} ph={String(total)}/>
+              <SRow l="Balance Due" v={fmt(bal)} c={bal>0?"#f87171":"#34d399"} b/>
+              {bal>0&&custId&&<div style={{fontSize:11,color:"#f59e0b",marginTop:4,padding:"5px 8px",background:"rgba(245,158,11,.06)",borderRadius:5}}>→ Balance added to customer debt in Supabase</div>}
+            </div>
+            <button style={{...C.btnP,width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14}} onClick={submit} disabled={busy}>
+              <I n="check" s={16}/> {busy?"Saving…":"Confirm Sale"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 /* ══════════════════════════════════════════════════════════════
    Receipt  —  with SEPARATE Save/Print buttons
@@ -665,7 +819,7 @@ function Receipt({ rcpt, products, onClose }) {
       {/* ── Receipt body – white card ── */}
       <div id="stow-receipt-body" style={{background:"#fff",color:"#111",padding:24,borderRadius:10,fontFamily:"'Courier New',monospace",fontSize:12}}>
         <div style={{textAlign:"center",marginBottom:14}}>
-          <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>Stove Works</div>
+          <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>STOW</div>
           <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
           <div style={{borderTop:"1px dashed #ccc",marginTop:8,paddingTop:8,fontSize:10,color:"#777"}}>
             Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
