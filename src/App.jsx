@@ -242,30 +242,82 @@ function BottomNav({ tab, setTab, TABS }) {
 }
 
 /* ══════════════════════════════════════════════════════════════
+   LOGIN — brute-force protection helpers
+   5 wrong attempts → 15-minute lockout, stored in localStorage
+══════════════════════════════════════════════════════════════ */
+const LOCK_KEY    = "stow_lockout";
+const ATTEMPT_KEY = "stow_attempts";
+const MAX_TRIES   = 5;
+const LOCK_MS     = 15 * 60 * 1000; // 15 minutes
+
+function getLockout()   { try { return JSON.parse(localStorage.getItem(LOCK_KEY)||"null"); } catch { return null; } }
+function setLockout()   { localStorage.setItem(LOCK_KEY, JSON.stringify({ until: Date.now() + LOCK_MS })); localStorage.removeItem(ATTEMPT_KEY); }
+function clearLockout() { localStorage.removeItem(LOCK_KEY); localStorage.removeItem(ATTEMPT_KEY); }
+function getAttempts()  { return parseInt(localStorage.getItem(ATTEMPT_KEY)||"0",10); }
+function incAttempts()  { const n = getAttempts()+1; localStorage.setItem(ATTEMPT_KEY, String(n)); return n; }
+
+/* ══════════════════════════════════════════════════════════════
    LOGIN SCREEN
 ══════════════════════════════════════════════════════════════ */
 function LoginScreen({ onLogin }) {
-  const [user,  setUser]  = useState("");
-  const [pass,  setPass]  = useState("");
-  const [err,   setErr]   = useState("");
-  const [busy,  setBusy]  = useState(false);
-  const [showP, setShowP] = useState(false);
+  const [user,     setUser]     = useState("");
+  const [pass,     setPass]     = useState("");
+  const [err,      setErr]      = useState("");
+  const [busy,     setBusy]     = useState(false);
+  const [showP,    setShowP]    = useState(false);
+  const [lockSecs, setLockSecs] = useState(0); // countdown seconds remaining
+  const [attLeft,  setAttLeft]  = useState(MAX_TRIES - getAttempts()); // attempts remaining
+
+  // Tick countdown if locked
+  useEffect(() => {
+    const tick = () => {
+      const lk = getLockout();
+      if (lk && lk.until > Date.now()) {
+        setLockSecs(Math.ceil((lk.until - Date.now()) / 1000));
+      } else {
+        if (lk) clearLockout();
+        setLockSecs(0);
+        setAttLeft(MAX_TRIES - getAttempts());
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fmtCountdown = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 
   const doLogin = async () => {
+    // Check lockout first
+    const lk = getLockout();
+    if (lk && lk.until > Date.now()) return;
+
     if (!user.trim()||!pass) return setErr("Please enter both username and password.");
     setBusy(true); setErr("");
     try {
       const creds = await getDBCreds();
       if (user.trim()===creds.username && pass===creds.password) {
+        clearLockout();                       // reset on success
         setSession(user.trim()); onLogin(user.trim());
       } else {
-        setErr("Incorrect username or password.");
+        const attempts = incAttempts();
+        const remaining = MAX_TRIES - attempts;
+        if (remaining <= 0) {
+          setLockout();
+          setLockSecs(Math.ceil(LOCK_MS / 1000));
+          setErr(`Too many failed attempts. Account locked for 15 minutes.`);
+        } else {
+          setAttLeft(remaining);
+          setErr(`Incorrect username or password. ${remaining} attempt${remaining===1?"":"s"} remaining.`);
+        }
       }
     } catch(e) {
       setErr("Could not connect to database: " + e.message);
     }
     setBusy(false);
   };
+
+  const isLocked = lockSecs > 0;
 
   return (
     <div style={{minHeight:"100vh",background:"#060a10",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -277,33 +329,64 @@ function LoginScreen({ onLogin }) {
           <div style={{fontSize:14,fontWeight:700,letterSpacing:6,color:"#f59e0b",marginTop:2}}>STOVE WORKS</div>
           <div style={{color:"#475569",fontSize:11,letterSpacing:3,marginTop:6}}>WHOLESALE & RETAIL</div>
         </div>
-        <div style={{background:"#0a0f1a",border:"1px solid #1e293b",borderRadius:18,padding:"28px 24px"}}>
-          <div style={{marginBottom:14}}>
-            <label style={C.lbl}>Username</label>
-            <input style={{...C.inp,fontSize:16}} value={user} onChange={e=>setUser(e.target.value)} placeholder="admin"
-              onKeyDown={e=>e.key==="Enter"&&doLogin()} autoFocus/>
-          </div>
-          <div style={{marginBottom:16,position:"relative"}}>
-            <label style={C.lbl}>Password</label>
-            <input style={{...C.inp,fontSize:16}} type={showP?"text":"password"} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••"
-              onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
-            <button onClick={()=>setShowP(s=>!s)}
-              style={{position:"absolute",right:12,top:28,background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12,padding:"4px 6px"}}>
-              {showP?"Hide":"Show"}
-            </button>
-          </div>
-          {err&&(
-            <div style={{marginBottom:14,padding:"10px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:10,color:"#f87171",fontSize:13}}>
-              {err}
+
+        <div style={{background:"#0a0f1a",border:`1px solid ${isLocked?"rgba(239,68,68,.4)":"#1e293b"}`,borderRadius:18,padding:"28px 24px"}}>
+
+          {/* ── Lockout banner ── */}
+          {isLocked && (
+            <div style={{textAlign:"center",padding:"20px 0 24px"}}>
+              <div style={{fontSize:40,marginBottom:10}}>🔒</div>
+              <div style={{color:"#f87171",fontWeight:800,fontSize:16,marginBottom:6}}>Account Locked</div>
+              <div style={{color:"#94a3b8",fontSize:13,marginBottom:16}}>Too many failed attempts.</div>
+              <div style={{
+                display:"inline-block",
+                background:"rgba(239,68,68,.1)",border:"1px solid rgba(239,68,68,.3)",
+                borderRadius:10,padding:"12px 24px",
+                fontFamily:"'Courier New',monospace",fontSize:28,fontWeight:800,
+                color:"#f87171",letterSpacing:4
+              }}>{fmtCountdown(lockSecs)}</div>
+              <div style={{color:"#64748b",fontSize:11,marginTop:10}}>Try again in {Math.ceil(lockSecs/60)} minute{Math.ceil(lockSecs/60)===1?"":"s"}</div>
             </div>
           )}
-          <button onClick={doLogin} disabled={busy}
-            style={{width:"100%",padding:"15px 0",background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",opacity:busy?.6:1,letterSpacing:.3,minHeight:52}}>
-            {busy?"Signing in…":"Sign In →"}
-          </button>
-          <div style={{marginTop:16,textAlign:"center",fontSize:11,color:"#475569"}}>
-            Change password in Settings after login
-          </div>
+
+          {/* ── Normal login form ── */}
+          {!isLocked && (<>
+            <div style={{marginBottom:14}}>
+              <label style={C.lbl}>Username</label>
+              <input style={{...C.inp,fontSize:16}} value={user} onChange={e=>setUser(e.target.value)} placeholder="admin"
+                onKeyDown={e=>e.key==="Enter"&&doLogin()} autoFocus/>
+            </div>
+            <div style={{marginBottom:16,position:"relative"}}>
+              <label style={C.lbl}>Password</label>
+              <input style={{...C.inp,fontSize:16}} type={showP?"text":"password"} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••"
+                onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+              <button onClick={()=>setShowP(s=>!s)}
+                style={{position:"absolute",right:12,top:28,background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12,padding:"4px 6px"}}>
+                {showP?"Hide":"Show"}
+              </button>
+            </div>
+
+            {/* Attempt warning bar */}
+            {attLeft < MAX_TRIES && attLeft > 0 && (
+              <div style={{marginBottom:12,padding:"8px 12px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.25)",borderRadius:8,fontSize:12,color:"#fbbf24",display:"flex",alignItems:"center",gap:6}}>
+                <I n="warn" s={13}/> {attLeft} attempt{attLeft===1?"":"s"} remaining before lockout
+              </div>
+            )}
+
+            {err&&(
+              <div style={{marginBottom:14,padding:"10px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:10,color:"#f87171",fontSize:13}}>
+                {err}
+              </div>
+            )}
+
+            <button onClick={doLogin} disabled={busy}
+              style={{width:"100%",padding:"15px 0",background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",opacity:busy?.6:1,letterSpacing:.3,minHeight:52}}>
+              {busy?"Signing in…":"Sign In →"}
+            </button>
+            <div style={{marginTop:16,textAlign:"center",fontSize:11,color:"#475569"}}>
+              Change password in Settings after login
+            </div>
+          </>)}
         </div>
       </div>
     </div>
@@ -1484,56 +1567,188 @@ function ImportData({ data, refresh, isMobile }) {
     try {
       setStatus("Reading Excel file…");
       const buf = await file.arrayBuffer();
-      const wb  = XLSX.read(buf,{type:"array",cellDates:true});
-      addLog(`Sheets: ${wb.SheetNames.join(", ")}`);
+      // cellDates:true → Date objects; cellNF:false; raw values + cached formula results
+      const wb  = XLSX.read(buf, { type:"array", cellDates:true });
+      addLog(`Sheets found: ${wb.SheetNames.join(", ")}`);
 
-      if (wb.SheetNames.includes("Inventory")) {
-        setStatus("Importing inventory…"); setPct(0);
-        const rows=XLSX.utils.sheet_to_json(wb.Sheets["Inventory"]);
-        const valid=rows.filter(r=>r["Product Name"]&&r["Selling Price"]&&!String(r["Product Name"]).startsWith("="));
-        const prods=valid.map(r=>({id:uid(),name:String(r["Product Name"]).trim(),category:String(r["Category"]||"").trim(),buy_price:Number(r["Buying Price"]||0),sell_price:Number(r["Selling Price"]||0),stock:Number(r["Stock"]||0),unit:String(r["Unit"]||"pcs").trim()}));
-        await chunk("products",prods,20);
-        addLog(`✓ ${prods.length} products imported`,"ok");
+      /* ── 1. PRODUCTS ── 
+         Supports both sheet names:
+           "products"  → columns: name, buy_price, sell_price, stock, gst  (new format)
+           "Inventory" → columns: Product Name, Buying Price, Selling Price, Stock, Unit  (old format)
+      ─────────────────────────────────────────────────────── */
+      const prodSheet = wb.SheetNames.includes("products")  ? "products"
+                      : wb.SheetNames.includes("Inventory") ? "Inventory"
+                      : null;
+      if (prodSheet) {
+        setStatus("Importing products…"); setPct(0);
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[prodSheet]);
+        addLog(`  "${prodSheet}" — ${rows.length} raw rows`);
+
+        let prods;
+        if (prodSheet === "products") {
+          // New format — columns are lowercase: name, buy_price, sell_price, stock, gst
+          const valid = rows.filter(r => r["name"] && r["sell_price"] != null && !String(r["name"]).startsWith("="));
+          prods = valid.map(r => ({
+            id:         uid(),
+            name:       String(r["name"]).trim(),
+            category:   String(r["category"] || "").trim(),
+            buy_price:  Number(r["buy_price"]  || 0),
+            sell_price: Number(r["sell_price"] || 0),
+            gst:        Number(r["gst"]        || 0),
+            stock:      Number(r["stock"]      || 0),
+            unit:       String(r["unit"]       || "pcs").trim(),
+          }));
+        } else {
+          // Old "Inventory" format — columns: Product Name, Buying Price, Selling Price, etc.
+          const valid = rows.filter(r => r["Product Name"] && r["Selling Price"] != null && !String(r["Product Name"]).startsWith("="));
+          prods = valid.map(r => ({
+            id:         uid(),
+            name:       String(r["Product Name"]).trim(),
+            category:   String(r["Category"]   || "").trim(),
+            buy_price:  Number(r["Buying Price"]|| 0),
+            sell_price: Number(r["Selling Price"]|| 0),
+            gst:        Number(r["GST"]         || r["gst"] || 0),
+            stock:      Number(r["Stock"]       || 0),
+            unit:       String(r["Unit"]        || "pcs").trim(),
+          }));
+        }
+        if (prods.length) { await chunk("products", prods, 20); addLog(`✓ ${prods.length} products imported`, "ok"); }
+        else addLog("  No valid product rows found — check column names", "err");
+      } else {
+        addLog('  No products sheet found (expected "products" or "Inventory")', "err");
       }
+
+      /* ── 2. DEALERS / CUSTOMERS ──
+         Sheet: "Dealers"
+         Columns (any format): Name/name, Phone/phone, Address/address, Debt/debt
+      ─────────────────────────────────────────────────────── */
       if (wb.SheetNames.includes("Dealers")) {
         setStatus("Importing customers…"); setPct(0);
-        const rows=XLSX.utils.sheet_to_json(wb.Sheets["Dealers"]);
-        const valid=rows.filter(r=>r["Name"]&&!String(r["Name"]).startsWith("="));
-        const custs=valid.map(r=>({id:uid(),name:String(r["Name"]).trim(),phone:String(r["Phone"]||"").trim(),address:String(r["Address"]||"").trim(),debt:Number(r["Debt"]||0)}));
-        await chunk("customers",custs,20);
-        addLog(`✓ ${custs.length} customers imported`,"ok");
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets["Dealers"]);
+        // Normalise key casing: try both "Name" and "name" etc.
+        const v = (r, ...keys) => { for (const k of keys) if (r[k] != null) return r[k]; return ""; };
+        const valid = rows.filter(r =>
+          (r["Name"] || r["name"]) &&
+          !String(r["Name"] || r["name"] || "").startsWith("=")
+        );
+        const custs = valid.map(r => ({
+          id:      uid(),
+          name:    String(v(r,"Name","name")).trim(),
+          phone:   String(v(r,"Phone","phone","Mobile","mobile")).trim(),
+          address: String(v(r,"Address","address")).trim(),
+          debt:    Number(v(r,"Debt","debt","Outstanding","outstanding") || 0),
+        }));
+        if (custs.length) { await chunk("customers", custs, 20); addLog(`✓ ${custs.length} dealers/customers imported`, "ok"); }
+        else addLog('  Dealers sheet is empty — skipped (add data with Name, Phone, Address, Debt columns)', "info");
       }
-      if (wb.SheetNames.includes("Salary")) {
+
+      /* ── 3. EXPENSES ──
+         Supports both sheet names:
+           "expenses" → 3-row header (title row, blank row, then DATE / amount / DISCREPTION)
+           "Salary"   → standard header row (Date / Amount / Type)
+      ─────────────────────────────────────────────────────── */
+      const expSheet = wb.SheetNames.includes("expenses") ? "expenses"
+                     : wb.SheetNames.includes("Salary")   ? "Salary"
+                     : null;
+      if (expSheet) {
         setStatus("Importing expenses…"); setPct(0);
-        const rows=XLSX.utils.sheet_to_json(wb.Sheets["Salary"],{raw:false});
-        const valid=rows.filter(r=>r["Amount"]&&r["Date"]&&!String(r["Amount"]).startsWith("="));
-        const exps=valid.map(r=>({id:uid(),date:toISO(r["Date"]),amount:Number(r["Amount"]||0),description:String(r["Type"]||"salary").toLowerCase().trim(),created_at:Date.now()}));
-        await chunk("expenses",exps,20);
-        addLog(`✓ ${exps.length} expenses imported`,"ok");
+        let exps;
+
+        if (expSheet === "expenses") {
+          // First row = "Salary" title, second row = blank, third row = actual headers (DATE, amount, DISCREPTION)
+          // Tell sheet_to_json to start at row-index 2 (0-based) so it uses row 3 as the header
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets["expenses"], { range: 2, raw: false });
+          addLog(`  "expenses" — ${rows.length} data rows`);
+          const valid = rows.filter(r => r["amount"] && r["DATE"] && !String(r["amount"]).startsWith("="));
+          exps = valid.map(r => ({
+            id:          uid(),
+            date:        toISO(r["DATE"]),
+            amount:      Number(r["amount"] || 0),
+            description: String(r["DISCREPTION"] || r["description"] || "salary").toLowerCase().trim(),
+            created_at:  Date.now(),
+          }));
+        } else {
+          // Old "Salary" format
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets["Salary"], { raw: false });
+          const valid = rows.filter(r => r["Amount"] && r["Date"] && !String(r["Amount"]).startsWith("="));
+          exps = valid.map(r => ({
+            id:          uid(),
+            date:        toISO(r["Date"]),
+            amount:      Number(r["Amount"] || 0),
+            description: String(r["Type"] || "salary").toLowerCase().trim(),
+            created_at:  Date.now(),
+          }));
+        }
+        if (exps.length) { await chunk("expenses", exps, 20); addLog(`✓ ${exps.length} expense entries imported`, "ok"); }
+        else addLog("  No valid expense rows found", "err");
+      } else {
+        addLog('  No expenses sheet found (expected "expenses" or "Salary")', "err");
       }
+
+      /* ── 4. SALES ──
+         Sheet: "Sales"
+         Columns: Date, Product Name, Selling Price, Quantity, Buying prize, Profits, Total
+         Rows are individual line items; we group by date → one sale record per day.
+         Formula cells store cached values — XLSX.js reads those automatically.
+      ─────────────────────────────────────────────────────── */
       if (wb.SheetNames.includes("Sales")) {
         setStatus("Importing sales…"); setPct(0);
-        const rows=XLSX.utils.sheet_to_json(wb.Sheets["Sales"],{raw:false});
-        const valid=rows.filter(r=>r["Product Name"]&&!String(r["Product Name"]).startsWith("=")&&r["Date"]);
-        const pMap={};
-        data.products.forEach(p=>{pMap[p.name.trim().toLowerCase()]=p.id;});
-        const grouped={};
-        valid.forEach(r=>{ const d=toISO(r["Date"]); if(!grouped[d]) grouped[d]=[]; grouped[d].push(r); });
-        const saleDocs=Object.entries(grouped).map(([date,items])=>({
-          id:uid(),date,created_at:new Date(date).getTime()||Date.now(),
-          customer_id:null,walk_in_name:null,
-          items:items.map(r=>({productId:pMap[String(r["Product Name"]).trim().toLowerCase()]||uid(),qty:Number(r["Quantity"]||1),price:Number(r["Selling Price"]||0)})),
-          total:items.reduce((a,r)=>a+Number(r["Total"]||0),0),
-          profit:items.reduce((a,r)=>a+Number(r["Profits"]||0),0),
-          paid:items.reduce((a,r)=>a+Number(r["Total"]||0),0),note:"",
-        }));
-        await chunk("sales",saleDocs,20);
-        addLog(`✓ ${saleDocs.length} sale records imported`,"ok");
+        // raw:false → gives us formatted strings; dates become localised strings
+        // We need raw:true for numbers so arithmetic works, but dates as strings via cellDates already handled
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets["Sales"], { raw: true, cellDates: true });
+        addLog(`  "Sales" — ${rows.length} raw line-item rows`);
+
+        const valid = rows.filter(r =>
+          r["Product Name"] &&
+          !String(r["Product Name"]).startsWith("=") &&
+          r["Date"]
+        );
+
+        // Build product name → id map (include products just imported above, re-fetch from current data)
+        const pMap = {};
+        data.products.forEach(p => { pMap[p.name.trim().toLowerCase()] = p.id; });
+
+        // Group by ISO date — each day becomes one sale document
+        const grouped = {};
+        valid.forEach(r => {
+          const d = toISO(r["Date"]);
+          if (!grouped[d]) grouped[d] = [];
+          grouped[d].push(r);
+        });
+
+        const saleDocs = Object.entries(grouped).map(([date, items]) => {
+          const saleItems = items.map(r => ({
+            productId: pMap[String(r["Product Name"]).trim().toLowerCase()] || uid(),
+            qty:   Number(r["Quantity"]      || 1),
+            price: Number(r["Selling Price"] || 0),
+          }));
+          // Prefer cached formula values for Total / Profits; fall back to calculating
+          const total  = items.reduce((a, r) => a + Number(r["Total"]        || 0), 0) ||
+                         saleItems.reduce((a, i) => a + i.price * i.qty, 0);
+          const profit = items.reduce((a, r) => a + Number(r["Profits"]      || 0), 0) ||
+                         items.reduce((a, r) => a + Number(r["Selling Price"] || 0) * Number(r["Quantity"] || 1)
+                                               - Number(r["Buying prize"]    || 0) * Number(r["Quantity"] || 1), 0);
+          return {
+            id: uid(), date,
+            created_at: new Date(date).getTime() || Date.now(),
+            customer_id: null, walk_in_name: null,
+            items: saleItems, total, profit, paid: total, note: "",
+          };
+        });
+
+        if (saleDocs.length) { await chunk("sales", saleDocs, 20); addLog(`✓ ${saleDocs.length} sale records imported (${valid.length} line items)`, "ok"); }
+        else addLog("  No valid sales rows found", "err");
       }
-      await refresh(); setStatus("Import complete! 🎉");
-      addLog("All data is now live in Supabase.","ok");
-    } catch(e) { addLog("Error: "+e.message,"err"); setStatus("Import failed — check log below"); }
-    setBusy(false); setPct(0); e.target.value="";
+
+      await refresh();
+      setStatus("Import complete! 🎉");
+      addLog("All data is now live in Supabase.", "ok");
+    } catch(e) {
+      addLog("Error: " + e.message, "err");
+      setStatus("Import failed — check log below");
+      console.error(e);
+    }
+    setBusy(false); setPct(0); e.target.value = "";
   };
 
   return (
@@ -1541,9 +1756,15 @@ function ImportData({ data, refresh, isMobile }) {
       <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Import Data</h1>
       <div style={C.card}>
         <ST>Upload Excel File</ST>
-        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12,lineHeight:1.5}}>
+        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12,lineHeight:1.6}}>
           Upload <b style={{color:"#f59e0b"}}>Sales_Inventory_Template.xlsx</b><br/>
-          <span style={{color:"#64748b",fontSize:12}}>Imports: Inventory · Dealers · Salary · Sales</span>
+          <span style={{color:"#64748b",fontSize:12}}>
+            Imports all 4 sheets automatically:<br/>
+            <b style={{color:"#94a3b8"}}>products</b> → inventory with GST &nbsp;·&nbsp;
+            <b style={{color:"#94a3b8"}}>Dealers</b> → customers with debt<br/>
+            <b style={{color:"#94a3b8"}}>expenses</b> → salary & costs &nbsp;·&nbsp;
+            <b style={{color:"#94a3b8"}}>Sales</b> → all sale records
+          </span>
         </p>
         <div style={{...C.alertW,marginBottom:14}}><I n="warn" s={14}/> Safe to run multiple times</div>
         <label style={{...C.btnP,cursor:"pointer",display:"inline-flex",gap:6,minHeight:48,padding:"12px 20px",fontSize:14}}>
