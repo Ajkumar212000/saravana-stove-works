@@ -42,33 +42,22 @@ const fmtDate = d  => { if (!d) return "—"; try { return new Date(d).toLocaleD
 const toISO   = d  => { if (!d) return today(); if (d instanceof Date) return d.toISOString().slice(0,10); if (typeof d==="number") return new Date(Math.round((d-25569)*86400*1000)).toISOString().slice(0,10); return String(d).slice(0,10); };
 
 /* ══════════════════════════════════════════════════════════════
-   Auth helpers — credentials stored in Supabase settings table
-   Row: { id:"credentials", username:"admin", password:"admin123" }
-   Session (who is logged in on this device) still uses localStorage
-   so the page survives a refresh without hitting the DB again.
+   Auth helpers
 ══════════════════════════════════════════════════════════════ */
-
-// Fetch credentials from Supabase; seed defaults if row doesn't exist yet
 async function getDBCreds() {
   try {
     const rows = await sb.getAll("settings", "&id=eq.credentials");
     if (rows && rows.length > 0) return rows[0];
-    // First-run: create the default credentials row
     const def = { id:"credentials", username:"admin", password:"admin123" };
     await sb.upsert("settings", def);
     return def;
   } catch {
-    // If settings table doesn't exist yet fall back to local default
     return { id:"credentials", username:"admin", password:"admin123" };
   }
 }
-
-// Save updated credentials back to Supabase
 async function saveDBCreds(c) {
   await sb.upsert("settings", { id:"credentials", username:c.username, password:c.password });
 }
-
-// Session lives in localStorage (device-only, no sensitive data stored)
 function isLoggedIn() { return !!localStorage.getItem("stow_session"); }
 function setSession(u) { localStorage.setItem("stow_session", u); }
 function clearSession() { localStorage.removeItem("stow_session"); }
@@ -99,6 +88,8 @@ const I = ({ n, s=16 }) => {
     logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>,
     key:    <><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></>,
     money:  <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+    menu:   <><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></>,
+    user:   <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
   };
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -127,7 +118,7 @@ function MT({ text }) {
 }
 function SRow({ l, v, c, b }) {
   return (
-    <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",fontSize:13,color:"#94a3b8"}}>
+    <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,color:"#94a3b8"}}>
       <span>{l}</span>
       <span style={{fontWeight:b?700:500,color:c||"#e2e8f0"}}>{v}</span>
     </div>
@@ -135,15 +126,15 @@ function SRow({ l, v, c, b }) {
 }
 function StatC({ label, val, sub, acc }) {
   return (
-    <div style={{...C.card,borderTop:`3px solid ${acc}`,padding:"14px 18px"}}>
-      <div style={{color:"#94a3b8",fontSize:11,marginBottom:4}}>{label}</div>
-      <div style={{fontSize:22,fontWeight:800,color:acc,letterSpacing:-1}}>{val}</div>
-      <div style={{color:"#64748b",fontSize:11,marginTop:3}}>{sub}</div>
+    <div style={{...C.card,borderTop:`3px solid ${acc}`,padding:"14px 16px"}}>
+      <div style={{color:"#94a3b8",fontSize:10,marginBottom:4}}>{label}</div>
+      <div style={{fontSize:20,fontWeight:800,color:acc,letterSpacing:-1}}>{val}</div>
+      <div style={{color:"#64748b",fontSize:10,marginTop:3}}>{sub}</div>
     </div>
   );
 }
 
-/* ── Toast notification ── */
+/* ── Toast ── */
 function useToast() {
   const [t, setT] = useState(null);
   const show = (msg, type="ok") => { setT({msg,type}); setTimeout(()=>setT(null),3000); };
@@ -153,7 +144,7 @@ function Toast({ t }) {
   if (!t) return null;
   const bg = t.type==="err"?"#ef4444":t.type==="warn"?"#f59e0b":"#10b981";
   return (
-    <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:bg,color:"#fff",padding:"10px 22px",borderRadius:10,fontWeight:600,fontSize:13,zIndex:9999,boxShadow:"0 4px 24px rgba(0,0,0,.5)"}}>
+    <div style={{position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",background:bg,color:"#fff",padding:"12px 24px",borderRadius:12,fontWeight:600,fontSize:14,zIndex:9999,boxShadow:"0 4px 24px rgba(0,0,0,.6)",whiteSpace:"nowrap",maxWidth:"90vw"}}>
       {t.msg}
     </div>
   );
@@ -166,14 +157,84 @@ function useIsMobile() {
   return m;
 }
 
-/* ── Bottom Mobile NavBar ── */
+/* ══════════════════════════════════════════════════════════════
+   MOBILE HEADER — sticky top bar with logout + change password
+══════════════════════════════════════════════════════════════ */
+function MobileHeader({ uname, onLogout, onChangePw }) {
+  return (
+    <div style={{
+      position:"sticky",top:0,zIndex:250,
+      background:"#080c14",
+      borderBottom:"1px solid #1a2235",
+      display:"flex",alignItems:"center",justifyContent:"space-between",
+      padding:"10px 14px",
+      WebkitBackdropFilter:"blur(12px)",
+      backdropFilter:"blur(12px)",
+    }} className="no-print">
+      {/* Brand */}
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:36,height:36,background:"linear-gradient(135deg,#f59e0b,#b45309)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:18,color:"#0d1117",flexShrink:0}}>S</div>
+        <div>
+          <div style={{fontWeight:800,fontSize:13,color:"#f0f6ff",letterSpacing:.5,lineHeight:1.2}}>STOVE WORKS</div>
+          <div style={{fontSize:10,color:"#475569",marginTop:1}}>👤 {uname}</div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <button onClick={onChangePw} style={{
+          background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.25)",
+          borderRadius:9,padding:"9px 12px",color:"#f59e0b",
+          cursor:"pointer",display:"flex",alignItems:"center",gap:5,
+          fontSize:12,fontWeight:600,minHeight:40,
+        }}>
+          <I n="key" s={15}/><span style={{display:"none"}}>Password</span>
+        </button>
+        <button onClick={onLogout} style={{
+          background:"rgba(248,113,113,.1)",border:"1px solid rgba(248,113,113,.25)",
+          borderRadius:9,padding:"9px 14px",color:"#f87171",
+          cursor:"pointer",display:"flex",alignItems:"center",gap:6,
+          fontSize:12,fontWeight:700,minHeight:40,
+        }}>
+          <I n="logout" s={15}/> Logout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BOTTOM NAV — improved touch targets + safe area
+══════════════════════════════════════════════════════════════ */
 function BottomNav({ tab, setTab, TABS }) {
   return (
-    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#080c14",borderTop:"1px solid #1a2235",zIndex:300,display:"flex",overflowX:"auto",WebkitOverflowScrolling:"touch"}} className="no-print">
+    <div style={{
+      position:"fixed",bottom:0,left:0,right:0,
+      background:"#080c14",
+      borderTop:"1px solid #1a2235",
+      zIndex:300,
+      display:"flex",
+      overflowX:"auto",
+      WebkitOverflowScrolling:"touch",
+      paddingBottom:"env(safe-area-inset-bottom,0px)",
+      scrollbarWidth:"none",
+    }} className="no-print">
       {TABS.map(t=>(
-        <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:"0 0 auto",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"8px 12px",background:"none",border:"none",color:tab===t.id?"#f59e0b":"#64748b",cursor:"pointer",fontSize:9,fontWeight:tab===t.id?700:500,minWidth:60}}>
-          <I n={t.n} s={20}/>
-          <span style={{whiteSpace:"nowrap"}}>{t.label}</span>
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{
+          flex:"0 0 auto",
+          display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+          padding:"10px 10px 8px",
+          background:tab===t.id?"rgba(245,158,11,.08)":"none",
+          border:"none",
+          borderTop:tab===t.id?"2px solid #f59e0b":"2px solid transparent",
+          color:tab===t.id?"#f59e0b":"#4a5c74",
+          cursor:"pointer",fontSize:9,fontWeight:tab===t.id?700:500,
+          minWidth:58,minHeight:58,
+          transition:"color .15s",
+          WebkitTapHighlightColor:"transparent",
+        }}>
+          <I n={t.n} s={22}/>
+          <span style={{whiteSpace:"nowrap",marginTop:1}}>{t.label}</span>
         </button>
       ))}
     </div>
@@ -194,7 +255,7 @@ function LoginScreen({ onLogin }) {
     if (!user.trim()||!pass) return setErr("Please enter both username and password.");
     setBusy(true); setErr("");
     try {
-      const creds = await getDBCreds();   // fetch from Supabase
+      const creds = await getDBCreds();
       if (user.trim()===creds.username && pass===creds.password) {
         setSession(user.trim()); onLogin(user.trim());
       } else {
@@ -207,48 +268,41 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div style={{minHeight:"100vh",background:"#060a10",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}`}</style>
-      <div style={{width:"100%",maxWidth:360,animation:"fadeUp .35s ease"}}>
-
-        {/* Brand */}
+    <div style={{minHeight:"100vh",background:"#060a10",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}} *{box-sizing:border-box} body{margin:0}`}</style>
+      <div style={{width:"100%",maxWidth:380,animation:"fadeUp .35s ease"}}>
         <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{display:"inline-flex",width:68,height:68,background:"linear-gradient(135deg,#f59e0b,#92400e)",borderRadius:20,alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:900,color:"#0d1117",marginBottom:16,boxShadow:"0 0 48px rgba(245,158,11,.25)"}}>S</div>
-          <div style={{fontSize:38,fontWeight:900,letterSpacing:8,color:"#f0f6ff",lineHeight:1}}>SARAVANAN STOVE WORKS</div>
-          <div style={{color:"#475569",fontSize:11,letterSpacing:3,marginTop:8}}>WHOLESALE & RETAIL</div>
+          <div style={{display:"inline-flex",width:72,height:72,background:"linear-gradient(135deg,#f59e0b,#92400e)",borderRadius:22,alignItems:"center",justifyContent:"center",fontSize:32,fontWeight:900,color:"#0d1117",marginBottom:16,boxShadow:"0 0 48px rgba(245,158,11,.25)"}}>S</div>
+          <div style={{fontSize:28,fontWeight:900,letterSpacing:4,color:"#f0f6ff",lineHeight:1.1}}>SARAVANAN</div>
+          <div style={{fontSize:14,fontWeight:700,letterSpacing:6,color:"#f59e0b",marginTop:2}}>STOVE WORKS</div>
+          <div style={{color:"#475569",fontSize:11,letterSpacing:3,marginTop:6}}>WHOLESALE & RETAIL</div>
         </div>
-
-        {/* Card */}
-        <div style={{background:"#0a0f1a",border:"1px solid #1e293b",borderRadius:16,padding:"32px 28px"}}>
+        <div style={{background:"#0a0f1a",border:"1px solid #1e293b",borderRadius:18,padding:"28px 24px"}}>
           <div style={{marginBottom:14}}>
             <label style={C.lbl}>Username</label>
-            <input style={C.inp} value={user} onChange={e=>setUser(e.target.value)} placeholder="admin"
+            <input style={{...C.inp,fontSize:16}} value={user} onChange={e=>setUser(e.target.value)} placeholder="admin"
               onKeyDown={e=>e.key==="Enter"&&doLogin()} autoFocus/>
           </div>
           <div style={{marginBottom:16,position:"relative"}}>
             <label style={C.lbl}>Password</label>
-            <input style={C.inp} type={showP?"text":"password"} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••"
+            <input style={{...C.inp,fontSize:16}} type={showP?"text":"password"} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••"
               onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
             <button onClick={()=>setShowP(s=>!s)}
-              style={{position:"absolute",right:10,top:26,background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:11,padding:"2px 4px"}}>
+              style={{position:"absolute",right:12,top:28,background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12,padding:"4px 6px"}}>
               {showP?"Hide":"Show"}
             </button>
           </div>
-
           {err&&(
-            <div style={{marginBottom:14,padding:"9px 12px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:"#f87171",fontSize:12}}>
+            <div style={{marginBottom:14,padding:"10px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:10,color:"#f87171",fontSize:13}}>
               {err}
             </div>
           )}
-
           <button onClick={doLogin} disabled={busy}
-            style={{width:"100%",padding:"13px 0",background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:10,fontWeight:800,fontSize:14,cursor:"pointer",opacity:busy?.6:1,letterSpacing:.3}}>
+            style={{width:"100%",padding:"15px 0",background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",opacity:busy?.6:1,letterSpacing:.3,minHeight:52}}>
             {busy?"Signing in…":"Sign In →"}
           </button>
-
-          <div style={{marginTop:18,padding:"10px 12px",background:"rgba(245,158,11,.04)",border:"1px solid rgba(245,158,11,.1)",borderRadius:8,fontSize:11,color:"#64748b",textAlign:"center"}}>
-            {/* Default credentials: <b style={{color:"#94a3b8"}}>admin</b> / <b style={{color:"#94a3b8"}}>admin123</b><br/> */}
-            <span style={{fontSize:10,color:"#475569"}}>Change password in Settings after login</span>
+          <div style={{marginTop:16,textAlign:"center",fontSize:11,color:"#475569"}}>
+            Change password in Settings after login
           </div>
         </div>
       </div>
@@ -269,9 +323,9 @@ function ChangePwModal({ onClose }) {
     if (f.n1 !== f.n2) return setErr("New passwords do not match.");
     if (f.n1.length < 4) return setErr("Password must be at least 4 characters.");
     try {
-      const creds = await getDBCreds();            // fetch from Supabase
+      const creds = await getDBCreds();
       if (f.old !== creds.password) return setErr("Current password is incorrect.");
-      await saveDBCreds({...creds, password:f.n1}); // save back to Supabase
+      await saveDBCreds({...creds, password:f.n1});
       setOk(true); setErr("");
     } catch(e) {
       setErr("Could not save: " + e.message);
@@ -279,29 +333,30 @@ function ChangePwModal({ onClose }) {
   };
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,padding:16}}>
-      <div style={{background:"#0a0f1a",border:"1px solid #1e293b",borderRadius:14,padding:"28px 24px",width:"100%",maxWidth:340}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:500,padding:0}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#0a0f1a",border:"1px solid #1e293b",borderRadius:"20px 20px 0 0",padding:"24px 20px 32px",width:"100%",maxWidth:480}}>
+        <div style={{width:40,height:4,background:"#1e293b",borderRadius:2,margin:"0 auto 20px"}}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <div style={{fontWeight:700,color:"#f0f6ff",fontSize:15}}>Change Password</div>
-          <button style={{background:"none",border:"none",color:"#64748b",cursor:"pointer"}} onClick={onClose}><I n="close" s={16}/></button>
+          <div style={{fontWeight:700,color:"#f0f6ff",fontSize:16}}>Change Password</div>
+          <button style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",padding:6}} onClick={onClose}><I n="close" s={18}/></button>
         </div>
         {ok ? (
           <div style={{textAlign:"center",padding:"20px 0"}}>
-            <div style={{fontSize:32,marginBottom:8}}>✅</div>
-            <div style={{color:"#10b981",fontWeight:600,marginBottom:16}}>Password changed successfully!</div>
-            <button style={C.btnP} onClick={onClose}>Done</button>
+            <div style={{fontSize:40,marginBottom:8}}>✅</div>
+            <div style={{color:"#10b981",fontWeight:600,marginBottom:20,fontSize:15}}>Password changed successfully!</div>
+            <button style={{...C.btnP,width:"100%",justifyContent:"center",padding:"14px 0",fontSize:15}} onClick={onClose}>Done</button>
           </div>
         ) : (
           <>
-            <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+            <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:18}}>
               <Fld label="Current Password" type="password" value={f.old} onChange={v=>setF(x=>({...x,old:v}))} ph="Current password"/>
               <Fld label="New Password"     type="password" value={f.n1}  onChange={v=>setF(x=>({...x,n1:v}))}  ph="New password"/>
               <Fld label="Confirm New"      type="password" value={f.n2}  onChange={v=>setF(x=>({...x,n2:v}))}  ph="Repeat new password"/>
             </div>
-            {err&&<div style={{color:"#f87171",fontSize:12,marginBottom:12,padding:"8px 10px",background:"rgba(239,68,68,.08)",borderRadius:6}}>{err}</div>}
-            <div style={{display:"flex",gap:8}}>
-              <button style={C.btnP} onClick={save}><I n="check" s={14}/> Save</button>
-              <button style={C.btnG} onClick={onClose}>Cancel</button>
+            {err&&<div style={{color:"#f87171",fontSize:13,marginBottom:14,padding:"10px 12px",background:"rgba(239,68,68,.08)",borderRadius:8}}>{err}</div>}
+            <div style={{display:"flex",gap:10}}>
+              <button style={{...C.btnP,flex:1,justifyContent:"center",padding:"13px 0",fontSize:14}} onClick={save}><I n="check" s={14}/> Save</button>
+              <button style={{...C.btnG,flex:1,justifyContent:"center",padding:"13px 0",fontSize:14}} onClick={onClose}>Cancel</button>
             </div>
           </>
         )}
@@ -340,83 +395,107 @@ export default function App() {
 
   const logout = () => { clearSession(); setAuthed(false); setReady(false); setTab("dashboard"); };
 
-  /* ── Login gate ── */
-  if (!authed) return (
-    <LoginScreen onLogin={u=>{ setUname(u); setAuthed(true); }}/>
-  );
+  if (!authed) return <LoginScreen onLogin={u=>{ setUname(u); setAuthed(true); }}/>;
 
-  /* ── Loading ── */
   if (!ready) return (
     <div style={C.splash}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <div style={{textAlign:"center"}}>
-        <div style={C.logo}>SARAVANA STOVE WORKS</div>
-        <div style={{color:"#64748b",fontSize:12,letterSpacing:3,marginBottom:20}}>Wholesale & Retail</div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} *{box-sizing:border-box} body{margin:0}`}</style>
+      <div style={{textAlign:"center",padding:"0 20px"}}>
+        <div style={{fontSize:36,fontWeight:900,letterSpacing:6,color:"#f59e0b",marginBottom:8}}>STOVE WORKS</div>
+        <div style={{color:"#64748b",fontSize:12,letterSpacing:3,marginBottom:24}}>Wholesale & Retail</div>
         {err
-          ? <div style={{color:"#f87171",fontSize:13,maxWidth:400,padding:"0 20px"}}>{err}</div>
-          : <><div style={{color:"#f59e0b",fontSize:12,display:"flex",alignItems:"center",gap:6,justifyContent:"center",marginBottom:12}}><I n="db" s={13}/> Connecting to Supabase…</div><div style={C.spinner}/></>
+          ? <div style={{color:"#f87171",fontSize:13,maxWidth:400}}>{err}</div>
+          : <><div style={{color:"#f59e0b",fontSize:12,display:"flex",alignItems:"center",gap:6,justifyContent:"center",marginBottom:14}}><I n="db" s={13}/> Connecting…</div><div style={C.spinner}/></>
         }
       </div>
     </div>
   );
 
   const TABS = [
-    {id:"dashboard",label:"Dashboard", n:"dash"},
-    {id:"inventory", label:"Inventory",  n:"inv"},
-    {id:"sales",     label:"New Sale",   n:"sale"},
-    {id:"customers", label:"Customers",  n:"cust"},
-    {id:"debts",     label:"Debts",      n:"debt"},
-    {id:"expenses",  label:"Expenses",   n:"exp"},
-    {id:"reports",   label:"Reports",    n:"rpt"},
-    {id:"import",    label:"Import Data",n:"import"},
+    {id:"dashboard",label:"Dashboard",n:"dash"},
+    {id:"inventory", label:"Inventory", n:"inv"},
+    {id:"sales",     label:"New Sale",  n:"sale"},
+    {id:"customers", label:"Customers", n:"cust"},
+    {id:"debts",     label:"Debts",     n:"debt"},
+    {id:"expenses",  label:"Expenses",  n:"exp"},
+    {id:"reports",   label:"Reports",   n:"rpt"},
+    {id:"import",    label:"Import",    n:"import"},
   ];
+
+  /* ── Global CSS including mobile overrides ── */
+  const globalCSS = `
+    @keyframes spin{to{transform:rotate(360deg)}}
+    body{margin:0}
+    *{box-sizing:border-box}
+    input:focus,select:focus{border-color:#f59e0b!important;outline:none}
+    @media print{.no-print{display:none!important}}
+    /* iOS zoom prevention */
+    @media(max-width:768px){
+      input,select,textarea{font-size:16px!important}
+    }
+    /* Hide scrollbar on nav */
+    .no-scrollbar::-webkit-scrollbar{display:none}
+    .no-scrollbar{-ms-overflow-style:none;scrollbar-width:none}
+    /* Tap highlight off */
+    *{-webkit-tap-highlight-color:transparent}
+  `;
 
   return (
     <div style={C.app}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}} body{margin:0} *{box-sizing:border-box} input:focus,select:focus{border-color:#f59e0b!important;outline:none} @media print{.no-print{display:none!important}}`}</style>
+      <style>{globalCSS}</style>
       {showPw && <ChangePwModal onClose={()=>setShowPw(false)}/>}
 
-      {/* ── Sidebar (desktop only) ── */}
-      {!isMobile && <aside style={C.sb} className="no-print">
-        <div style={C.brand}>
-          <div style={C.bIcon}>S</div>
-          <div>
-            <div style={C.bName}>STOVE WORKS</div>
-            <div style={C.bSub}>Wholesale & Retail</div>
+      {/* ── Desktop Sidebar ── */}
+      {!isMobile && (
+        <aside style={C.sb} className="no-print">
+          <div style={C.brand}>
+            <div style={C.bIcon}>S</div>
+            <div>
+              <div style={C.bName}>STOVE WORKS</div>
+              <div style={C.bSub}>Wholesale & Retail</div>
+            </div>
           </div>
-        </div>
-        <nav style={{flex:1,display:"flex",flexDirection:"column",gap:2}}>
-          {TABS.map(t=>(
-            <button key={t.id} style={{...C.nav,...(tab===t.id?C.navA:{})}} onClick={()=>setTab(t.id)}>
-              <I n={t.n} s={14}/> {t.label}
+          <nav style={{flex:1,display:"flex",flexDirection:"column",gap:2}}>
+            {TABS.map(t=>(
+              <button key={t.id} style={{...C.nav,...(tab===t.id?C.navA:{})}} onClick={()=>setTab(t.id)}>
+                <I n={t.n} s={14}/> {t.label}
+              </button>
+            ))}
+          </nav>
+          <div style={C.sbFoot}>
+            <div style={{display:"flex",alignItems:"center",gap:5,color:"#10b981",fontSize:11,marginBottom:6}}>
+              <I n="db" s={11}/> Supabase — Cloud DB
+            </div>
+            <div style={{color:"#64748b",fontSize:11,marginBottom:10}}>👤 {uname} · {fmtDate(today())}</div>
+            <button style={{...C.btnG,width:"100%",justifyContent:"center",fontSize:11,padding:"7px 0",marginBottom:7}} onClick={()=>setShowPw(true)}>
+              <I n="key" s={12}/> Change Password
             </button>
-          ))}
-        </nav>
-        <div style={C.sbFoot}>
-          <div style={{display:"flex",alignItems:"center",gap:5,color:"#10b981",fontSize:11,marginBottom:6}}>
-            <I n="db" s={11}/> Supabase — Cloud DB
+            <button style={{...C.btnG,width:"100%",justifyContent:"center",fontSize:11,padding:"7px 0",color:"#f87171",borderColor:"rgba(248,113,113,.3)"}} onClick={logout}>
+              <I n="logout" s={12}/> Logout
+            </button>
           </div>
-          <div style={{color:"#64748b",fontSize:11,marginBottom:10}}>👤 {uname} · {fmtDate(today())}</div>
-          <button style={{...C.btnG,width:"100%",justifyContent:"center",fontSize:11,padding:"6px 0",marginBottom:6}} onClick={()=>setShowPw(true)}>
-            <I n="key" s={12}/> Change Password
-          </button>
-          <button style={{...C.btnG,width:"100%",justifyContent:"center",fontSize:11,padding:"6px 0",color:"#f87171",borderColor:"rgba(248,113,113,.3)"}} onClick={logout}>
-            <I n="logout" s={12}/> Logout
-          </button>
-        </div>
-      </aside>}
+        </aside>
+      )}
 
-      {/* ── Main ── */}
-      <main style={{...C.main, padding:isMobile?"14px 10px 80px":"22px 28px"}}>
-        {tab==="dashboard" && <Dashboard  data={data} isMobile={isMobile}/>}
-        {tab==="inventory" && <Inventory  data={data} refresh={refresh}/>}
-        {tab==="sales"     && <Sales      data={data} refresh={refresh} setTab={setTab}/>}
-        {tab==="customers" && <Customers  data={data} refresh={refresh}/>}
-        {tab==="debts"     && <Debts      data={data} refresh={refresh}/>}
-        {tab==="expenses"  && <Expenses   data={data} refresh={refresh}/>}
-        {tab==="reports"   && <Reports    data={data} refresh={refresh}/>}
-        {tab==="import"    && <ImportData data={data} refresh={refresh}/>}
+      {/* ── Main content area ── */}
+      <main style={{...C.main, padding:0, display:"flex", flexDirection:"column", overflow:"hidden"}}>
+        {/* Mobile header */}
+        {isMobile && (
+          <MobileHeader uname={uname} onLogout={logout} onChangePw={()=>setShowPw(true)}/>
+        )}
+        {/* Scrollable content */}
+        <div style={{flex:1,overflow:"auto",padding:isMobile?"14px 12px 80px":"22px 28px"}}>
+          {tab==="dashboard" && <Dashboard  data={data} isMobile={isMobile}/>}
+          {tab==="inventory" && <Inventory  data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="sales"     && <Sales      data={data} refresh={refresh} setTab={setTab} isMobile={isMobile}/>}
+          {tab==="customers" && <Customers  data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="debts"     && <Debts      data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="expenses"  && <Expenses   data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="reports"   && <Reports    data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="import"    && <ImportData data={data} refresh={refresh} isMobile={isMobile}/>}
+        </div>
       </main>
+
       {isMobile && <BottomNav tab={tab} setTab={setTab} TABS={TABS}/>}
     </div>
   );
@@ -437,33 +516,34 @@ function Dashboard({ data, isMobile=false }) {
 
   return (
     <div style={C.pg}>
-      <h1 style={C.h1}>Dashboard</h1>
-      <div style={{...C.g4,gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)"}}>
-        <StatC label="Today Revenue"    val={fmt(tRev)}           sub={`${tSales.length} sales today`}                     acc="#f59e0b"/>
-        <StatC label="Today Net Profit" val={fmt(tProfit-tExp)}   sub="After expenses"                                     acc="#10b981"/>
-        <StatC label="Total Debt"       val={fmt(totDebt)}        sub={`${customers.filter(c=>c.debt>0).length} customers`} acc="#ef4444"/>
-        <StatC label="Today Expenses"   val={fmt(tExp)}           sub="Salary + others"                                    acc="#818cf8"/>
+      <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Dashboard</h1>
+      {/* Always 2×2 on mobile, 4 cols on desktop */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:10,marginBottom:16}}>
+        <StatC label="Today Revenue"    val={fmt(tRev)}           sub={`${tSales.length} sales`}                            acc="#f59e0b"/>
+        <StatC label="Net Profit"       val={fmt(tProfit-tExp)}   sub="After expenses"                                      acc="#10b981"/>
+        <StatC label="Total Debt"       val={fmt(totDebt)}        sub={`${customers.filter(c=>c.debt>0).length} customers`}  acc="#ef4444"/>
+        <StatC label="Today Expenses"   val={fmt(tExp)}           sub="Salary + others"                                     acc="#818cf8"/>
       </div>
 
       {lowStk.length>0&&(
-        <div style={C.alertW}>
+        <div style={{...C.alertW,marginBottom:14}}>
           <I n="warn" s={14}/>
-          <span><b>Low Stock:</b> {lowStk.slice(0,6).map(p=>`${p.name} (${p.stock})`).join(" · ")}{lowStk.length>6?` +${lowStk.length-6} more`:""}</span>
+          <span style={{fontSize:12}}><b>Low Stock:</b> {lowStk.slice(0,4).map(p=>`${p.name} (${p.stock})`).join(" · ")}{lowStk.length>4?` +${lowStk.length-4} more`:""}</span>
         </div>
       )}
 
-      <div style={{...C.two,gridTemplateColumns:isMobile?"1fr":"1fr 1fr"}}>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
         <div style={C.card}>
           <ST>Recent Sales</ST>
           {recent.length===0 ? <MT text="No sales yet"/> : recent.map(s=>{
             const c=customers.find(x=>x.id===s.customer_id);
             return (
               <div key={s.id} style={C.row}>
-                <div>
-                  <div style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{c?.name||s.walk_in_name||"Walk-in"}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,color:"#f0f6ff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.name||s.walk_in_name||"Walk-in"}</div>
                   <div style={{color:"#64748b",fontSize:11}}>{fmtDate(s.date)} · {(s.items||[]).length} item(s)</div>
                 </div>
-                <div style={{textAlign:"right"}}>
+                <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                   <div style={{fontWeight:700,color:"#f59e0b"}}>{fmt(s.total)}</div>
                   <div style={{fontSize:11,color:s.paid<s.total?"#f87171":"#34d399"}}>{s.paid<s.total?`Due ${fmt(s.total-s.paid)}`:"Paid ✓"}</div>
                 </div>
@@ -472,16 +552,16 @@ function Dashboard({ data, isMobile=false }) {
           })}
         </div>
         <div style={C.card}>
-          <ST>Dealer / Customer Debts</ST>
+          <ST>Outstanding Debts</ST>
           {customers.filter(c=>c.debt>0).length===0
             ? <MT text="No outstanding debts 🎉"/>
             : customers.filter(c=>c.debt>0).sort((a,b)=>b.debt-a.debt).map(c=>(
               <div key={c.id} style={C.row}>
-                <div>
-                  <div style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{c.name}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,color:"#f0f6ff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</div>
                   <div style={{color:"#64748b",fontSize:11}}>{c.phone||"—"}</div>
                 </div>
-                <div style={{fontWeight:800,color:"#f87171"}}>{fmt(c.debt)}</div>
+                <div style={{fontWeight:800,color:"#f87171",flexShrink:0,marginLeft:8}}>{fmt(c.debt)}</div>
               </div>
             ))
           }
@@ -494,7 +574,7 @@ function Dashboard({ data, isMobile=false }) {
 /* ══════════════════════════════════════════════════════════════
    Inventory
 ══════════════════════════════════════════════════════════════ */
-function Inventory({ data, refresh }) {
+function Inventory({ data, refresh, isMobile }) {
   const blank = {name:"",category:"",buy_price:"",sell_price:"",gst:0,stock:"",unit:"pcs"};
   const [form, setForm] = useState(blank);
   const [eid,  setEid]  = useState(null);
@@ -524,19 +604,21 @@ function Inventory({ data, refresh }) {
     p.name?.toLowerCase().includes(srch.toLowerCase())||(p.category||"").toLowerCase().includes(srch.toLowerCase())
   );
 
+  const formGrid = isMobile ? {display:"flex",flexDirection:"column",gap:12} : C.g3;
+
   return (
     <div style={C.pg}>
       <Toast t={t}/>
       <div style={C.phdr}>
-        <h1 style={C.h1}>Inventory <span style={{fontSize:13,color:"#64748b",fontWeight:400}}>({data.products.length})</span></h1>
-        <button style={C.btnP} onClick={()=>{setShow(true);setEid(null);setForm(blank);}}><I n="plus" s={14}/> Add Product</button>
+        <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Inventory <span style={{fontSize:13,color:"#64748b",fontWeight:400}}>({data.products.length})</span></h1>
+        <button style={{...C.btnP,minHeight:44}} onClick={()=>{setShow(true);setEid(null);setForm(blank);}}><I n="plus" s={14}/> Add</button>
       </div>
       <input style={C.srch} placeholder="Search by name or category…" value={srch} onChange={e=>setSrch(e.target.value)}/>
 
       {show&&(
-        <div style={{...C.card,marginBottom:16}}>
+        <div style={{...C.card,marginBottom:14}}>
           <ST>{eid?"Edit Product":"New Product"}</ST>
-          <div style={C.g3}>
+          <div style={formGrid}>
             <Fld label="Product Name *" value={form.name}      onChange={v=>setForm(f=>({...f,name:v}))}/>
             <Fld label="Category"       value={form.category}  onChange={v=>setForm(f=>({...f,category:v}))} ph="Burner, Lighter…"/>
             <Fld label="Buy Price ₹"   type="number" value={form.buy_price}  onChange={v=>setForm(f=>({...f,buy_price:v}))}/>
@@ -547,7 +629,7 @@ function Inventory({ data, refresh }) {
                 {[0,5,12,18,28].map(g=><option key={g} value={g}>{g}%</option>)}
               </select>
             </div>
-            <Fld label="Stock *"        type="number" value={form.stock}      onChange={v=>setForm(f=>({...f,stock:v}))}/>
+            <Fld label="Stock *" type="number" value={form.stock} onChange={v=>setForm(f=>({...f,stock:v}))}/>
             <div>
               <label style={C.lbl}>Unit</label>
               <select style={C.inp} value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))}>
@@ -555,42 +637,88 @@ function Inventory({ data, refresh }) {
               </select>
             </div>
           </div>
-          <div style={{display:"flex",gap:8,marginTop:12}}>
-            <button style={C.btnP} onClick={save} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":eid?"Update":"Add"}</button>
-            <button style={C.btnG} onClick={()=>{setShow(false);setEid(null);}}><I n="close" s={14}/> Cancel</button>
+          <div style={{display:"flex",gap:8,marginTop:14}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={save} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":eid?"Update":"Add"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>{setShow(false);setEid(null);}}><I n="close" s={14}/> Cancel</button>
           </div>
         </div>
       )}
 
-      <div style={C.tbl}>
-        <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px"}}>
-          <span>Product</span><span>Category</span><span>Buy ₹</span><span>Sell ₹</span><span>GST</span><span>Margin</span><span>Stock</span><span>Actions</span>
+      {/* ── Mobile: card layout ── */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filtered.length===0 ? <MT text="No products"/> : filtered.map(p=>(
+            <div key={p.id} style={{
+              ...C.card,
+              borderLeft:`3px solid ${p.stock<=5&&p.sell_price>0?"#ef4444":"#1a2235"}`,
+              padding:"14px 14px",
+            }}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:15,color:"#f0f6ff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                  <div style={{color:"#64748b",fontSize:12,marginTop:3}}>
+                    {p.category||"General"} · {p.unit}
+                    {(p.gst||0)>0&&<span style={{color:"#fbbf24",marginLeft:6}}>GST {p.gst}%</span>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:7,marginLeft:10,flexShrink:0}}>
+                  <button style={{...C.iBtn,padding:"8px 10px"}} onClick={()=>startEdit(p)}><I n="edit" s={16}/></button>
+                  <button style={{...C.iBtn,color:"#f87171",padding:"8px 10px"}} onClick={()=>del(p.id)}><I n="trash" s={16}/></button>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <div style={{background:"#0d1521",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#475569",marginBottom:3,letterSpacing:.5}}>BUY PRICE</div>
+                  <div style={{fontWeight:700,color:"#94a3b8",fontSize:13}}>{fmt(p.buy_price)}</div>
+                </div>
+                <div style={{background:"#0d1521",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#475569",marginBottom:3,letterSpacing:.5}}>SELL PRICE</div>
+                  <div style={{fontWeight:700,color:"#f59e0b",fontSize:13}}>{fmt(p.sell_price)}</div>
+                </div>
+                <div style={{background:"#0d1521",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#475569",marginBottom:3,letterSpacing:.5}}>STOCK</div>
+                  <div style={{fontWeight:700,color:p.stock<=5&&p.sell_price>0?"#f87171":"#34d399",fontSize:13}}>{p.stock}</div>
+                </div>
+              </div>
+              {p.buy_price>0&&(
+                <div style={{marginTop:8,fontSize:11,color:"#64748b"}}>
+                  Margin: <span style={{color:"#34d399",fontWeight:600}}>{(((p.sell_price-p.buy_price)/p.buy_price)*100).toFixed(0)}%</span>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-        {filtered.length===0?<MT text="No products"/>:filtered.map(p=>(
-          <div key={p.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px",...(p.stock<=5&&p.sell_price>0?{background:"rgba(239,68,68,.04)"}:{})}}>
-            <span style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{p.name}</span>
-            <span style={{color:"#94a3b8",fontSize:12}}>{p.category||"—"}</span>
-            <span style={{fontSize:13,color:"#cbd5e1"}}>{fmt(p.buy_price)}</span>
-            <span style={{color:"#f59e0b",fontWeight:600,fontSize:13}}>{fmt(p.sell_price)}</span>
-            <span style={{color:(p.gst||0)>0?"#fbbf24":"#475569",fontSize:12,fontWeight:600}}>{p.gst||0}%</span>
-            <span style={{color:"#34d399",fontSize:12}}>{p.buy_price>0?`${(((p.sell_price-p.buy_price)/p.buy_price)*100).toFixed(0)}%`:"—"}</span>
-            <span style={{color:p.stock<=5&&p.sell_price>0?"#f87171":"#e2e8f0",fontWeight:600,fontSize:13}}>{p.stock} {p.unit}</span>
-            <span style={{display:"flex",gap:5}}>
-              <button style={C.iBtn} onClick={()=>startEdit(p)}><I n="edit" s={13}/></button>
-              <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(p.id)}><I n="trash" s={13}/></button>
-            </span>
+      ) : (
+        /* ── Desktop: table layout ── */
+        <div style={C.tbl}>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px"}}>
+            <span>Product</span><span>Category</span><span>Buy ₹</span><span>Sell ₹</span><span>GST</span><span>Margin</span><span>Stock</span><span>Actions</span>
           </div>
-        ))}
-      </div>
+          {filtered.length===0?<MT text="No products"/>:filtered.map(p=>(
+            <div key={p.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 80px 80px 50px 60px 80px 70px",...(p.stock<=5&&p.sell_price>0?{background:"rgba(239,68,68,.04)"}:{})}}>
+              <span style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{p.name}</span>
+              <span style={{color:"#94a3b8",fontSize:12}}>{p.category||"—"}</span>
+              <span style={{fontSize:13,color:"#cbd5e1"}}>{fmt(p.buy_price)}</span>
+              <span style={{color:"#f59e0b",fontWeight:600,fontSize:13}}>{fmt(p.sell_price)}</span>
+              <span style={{color:(p.gst||0)>0?"#fbbf24":"#475569",fontSize:12,fontWeight:600}}>{p.gst||0}%</span>
+              <span style={{color:"#34d399",fontSize:12}}>{p.buy_price>0?`${(((p.sell_price-p.buy_price)/p.buy_price)*100).toFixed(0)}%`:"—"}</span>
+              <span style={{color:p.stock<=5&&p.sell_price>0?"#f87171":"#e2e8f0",fontWeight:600,fontSize:13}}>{p.stock} {p.unit}</span>
+              <span style={{display:"flex",gap:5}}>
+                <button style={C.iBtn} onClick={()=>startEdit(p)}><I n="edit" s={13}/></button>
+                <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(p.id)}><I n="trash" s={13}/></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════════
-   New Sale
+   New Sale — mobile-optimised item entry
 ══════════════════════════════════════════════════════════════ */
-function Sales({ data, refresh, setTab }) {
-  const isMobile = useIsMobile();
+function Sales({ data, refresh, setTab, isMobile }) {
   const [custId, setCustId] = useState("");
   const [walkIn, setWalkIn] = useState("");
   const [items,  setItems]  = useState([{productId:"",pname:"",qty:1,price:0}]);
@@ -605,10 +733,7 @@ function Sales({ data, refresh, setTab }) {
   const paidN  = parseFloat(paid)||0;
   const bal    = total-paidN;
 
-  const setItemField = (idx,field,val) => setItems(prev=>{
-    const n=[...prev]; n[idx]={...n[idx],[field]:val}; return n;
-  });
-
+  const setItemField = (idx,field,val) => setItems(prev=>{ const n=[...prev]; n[idx]={...n[idx],[field]:val}; return n; });
   const pickProduct = (idx,name) => setItems(prev=>{
     const n=[...prev]; n[idx]={...n[idx],pname:name};
     const p=data.products.find(x=>x.name.toLowerCase()===name.toLowerCase());
@@ -655,20 +780,17 @@ function Sales({ data, refresh, setTab }) {
   return (
     <div style={C.pg}>
       <Toast t={t}/>
-      <h1 style={C.h1}>New Sale</h1>
+      <h1 style={{...C.h1,fontSize:isMobile?18:20}}>New Sale</h1>
 
-      {/* ── After confirm: inline receipt with Print + New Sale side by side ── */}
       {rcpt&&(
         <div style={{marginBottom:20}}>
-          <div style={{...C.card,borderTop:"3px solid #10b981",marginBottom:12,padding:"14px 18px"}}>
+          <div style={{...C.card,borderTop:"3px solid #10b981",marginBottom:12,padding:"14px 16px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
               <div style={{color:"#34d399",fontWeight:700,fontSize:15}}>✓ Sale Confirmed!</div>
               <div style={{color:"#f59e0b",fontWeight:800,fontSize:20}}>{fmt(rcpt.total)}</div>
             </div>
             <div style={{color:"#94a3b8",fontSize:13}}>{rcpt.customerName} · {(rcpt.items||[]).length} item(s) · {fmtDate(rcpt.date)}</div>
           </div>
-
-          {/* Inline receipt — white card for printing */}
           <div id="stow-rcpt-inline" style={{background:"#fff",color:"#111",padding:20,borderRadius:10,fontFamily:"'Courier New',monospace",fontSize:12,maxWidth:360,marginBottom:14}}>
             <div style={{textAlign:"center",marginBottom:12}}>
               <div style={{fontSize:20,fontWeight:900,letterSpacing:5}}>Stove Works</div>
@@ -707,62 +829,65 @@ function Sales({ data, refresh, setTab }) {
             {rcpt.note&&<div style={{marginTop:8,fontSize:11,color:"#777"}}>Note: {rcpt.note}</div>}
             <div style={{textAlign:"center",marginTop:10,fontSize:10,color:"#aaa",borderTop:"1px dashed #ccc",paddingTop:8}}>Thank you! Visit again.</div>
           </div>
-
-          {/* Print Bill  |  New Sale — side by side */}
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <button style={{...C.btnP,padding:"11px 24px",fontSize:14}} onClick={()=>doPrint(rcpt)}>
+            <button style={{...C.btnP,padding:"13px 24px",fontSize:14,flex:isMobile?"1":"auto",justifyContent:"center",minHeight:50}} onClick={()=>doPrint(rcpt)}>
               <I n="print" s={15}/> Print Bill
             </button>
-            <button style={{...C.btnG,padding:"11px 22px",fontSize:14}} onClick={()=>setRcpt(null)}>
+            <button style={{...C.btnG,padding:"13px 22px",fontSize:14,flex:isMobile?"1":"auto",justifyContent:"center",minHeight:50}} onClick={()=>setRcpt(null)}>
               <I n="plus" s={15}/> New Sale
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Sale form (hidden while receipt is showing) ── */}
       {!rcpt&&(
-        <div style={{...C.two,gridTemplateColumns:isMobile?"1fr":"1fr 1fr"}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
           <div style={C.card}>
             <ST>Customer</ST>
             <div style={{marginBottom:10}}>
               <label style={C.lbl}>Existing Customer / Dealer</label>
               <select style={C.inp} value={custId} onChange={e=>{setCustId(e.target.value);setWalkIn("");}}>
                 <option value="">— Walk-in / Select —</option>
-                {data.customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.debt>0?` ⚠ Debt:${fmt(c.debt)}`:""}</option>)}
+                {data.customers.map(c=><option key={c.id} value={c.id}>{c.name}{c.debt>0?` ⚠ Due:${fmt(c.debt)}`:""}</option>)}
               </select>
             </div>
             {!custId&&<Fld label="Walk-in Name (optional)" value={walkIn} onChange={setWalkIn}/>}
 
-            <ST style={{marginTop:14}}>Items</ST>
+            <ST style={{marginTop:16}}>Items</ST>
             {items.map((item,idx)=>(
-              <div key={idx} style={{marginBottom:8}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 55px 80px 28px",gap:6}}>
-                  <div>
-                    <input style={C.inp} list={`pl-${idx}`} value={item.pname}
-                      placeholder="Search product…" onChange={e=>pickProduct(idx,e.target.value)}/>
-                    <datalist id={`pl-${idx}`}>
-                      {data.products.map(p=><option key={p.id} value={p.name}/>)}
-                    </datalist>
-                  </div>
-                  <input style={C.inp} type="number" min="1" value={item.qty} onChange={e=>setItemField(idx,"qty",+e.target.value)} placeholder="Qty"/>
-                  <input style={C.inp} type="number" value={item.price} onChange={e=>setItemField(idx,"price",+e.target.value)} placeholder="₹"/>
-                  <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>setItems(p=>p.filter((_,i)=>i!==idx))}><I n="close" s={12}/></button>
+              <div key={idx} style={{marginBottom:10,background:"#0d1521",borderRadius:10,padding:"10px 12px"}}>
+                {/* Product search — full width */}
+                <div style={{marginBottom:8}}>
+                  <input style={{...C.inp,background:"#08101e"}} list={`pl-${idx}`} value={item.pname}
+                    placeholder="Search product…" onChange={e=>pickProduct(idx,e.target.value)}/>
+                  <datalist id={`pl-${idx}`}>
+                    {data.products.map(p=><option key={p.id} value={p.name}/>)}
+                  </datalist>
+                </div>
+                {/* Qty | Price | Delete */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 44px",gap:8}}>
+                  <input style={{...C.inp,background:"#08101e"}} type="number" min="1" value={item.qty}
+                    onChange={e=>setItemField(idx,"qty",+e.target.value)} placeholder="Qty"/>
+                  <input style={{...C.inp,background:"#08101e"}} type="number" value={item.price}
+                    onChange={e=>setItemField(idx,"price",+e.target.value)} placeholder="₹ Price"/>
+                  <button style={{...C.iBtn,color:"#f87171",justifyContent:"center",minHeight:40,borderRadius:7}} onClick={()=>setItems(p=>p.filter((_,i)=>i!==idx))}><I n="close" s={15}/></button>
                 </div>
                 {item.productId&&(
-                  <div style={{fontSize:11,color:"#475569",marginTop:3,paddingLeft:2}}>
-                    {data.products.find(p=>p.id===item.productId)?.stock} left in stock
+                  <div style={{fontSize:11,color:"#475569",marginTop:7,display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <span>Stock: <b style={{color:"#94a3b8"}}>{data.products.find(p=>p.id===item.productId)?.stock}</b> left</span>
                     {(data.products.find(p=>p.id===item.productId)?.gst||0)>0&&
-                      <span style={{color:"#fbbf24",marginLeft:8}}>GST {data.products.find(p=>p.id===item.productId)?.gst}%</span>
-                    }
+                      <span style={{color:"#fbbf24"}}>GST {data.products.find(p=>p.id===item.productId)?.gst}%</span>}
                   </div>
                 )}
               </div>
             ))}
-            <button style={C.btnG} onClick={()=>setItems(p=>[...p,{productId:"",pname:"",qty:1,price:0}])}><I n="plus" s={13}/> Add Item</button>
-            <div style={{marginTop:10}}><Fld label="Note (optional)" value={note} onChange={setNote}/></div>
+            <button style={{...C.btnG,width:"100%",justifyContent:"center",minHeight:44}} onClick={()=>setItems(p=>[...p,{productId:"",pname:"",qty:1,price:0}])}>
+              <I n="plus" s={14}/> Add Item
+            </button>
+            <div style={{marginTop:12}}><Fld label="Note (optional)" value={note} onChange={setNote}/></div>
           </div>
 
+          {/* Summary */}
           <div>
             <div style={{...C.card,marginBottom:12}}>
               <ST>Summary</ST>
@@ -771,10 +896,10 @@ function Sales({ data, refresh, setTab }) {
               <div style={{borderTop:"1px solid #1e293b",margin:"10px 0"}}/>
               <Fld label="Amount Paid ₹" type="number" value={paid} onChange={setPaid} ph={String(total)}/>
               <SRow l="Balance Due" v={fmt(bal)} c={bal>0?"#f87171":"#34d399"} b/>
-              {bal>0&&custId&&<div style={{fontSize:11,color:"#f59e0b",marginTop:4,padding:"5px 8px",background:"rgba(245,158,11,.06)",borderRadius:5}}>→ Balance added to customer debt in Supabase</div>}
+              {bal>0&&custId&&<div style={{fontSize:11,color:"#f59e0b",marginTop:6,padding:"6px 10px",background:"rgba(245,158,11,.06)",borderRadius:6}}>→ Balance added to customer debt</div>}
             </div>
-            <button style={{...C.btnP,width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14}} onClick={submit} disabled={busy}>
-              <I n="check" s={16}/> {busy?"Saving…":"Confirm Sale"}
+            <button style={{...C.btnP,width:"100%",justifyContent:"center",padding:"15px 0",fontSize:15,minHeight:52}} onClick={submit} disabled={busy}>
+              <I n="check" s={18}/> {busy?"Saving…":"Confirm Sale"}
             </button>
           </div>
         </div>
@@ -783,41 +908,25 @@ function Sales({ data, refresh, setTab }) {
   );
 }
 
-
 /* ══════════════════════════════════════════════════════════════
-   Receipt  —  with SEPARATE Save/Print buttons
+   Receipt
 ══════════════════════════════════════════════════════════════ */
 function Receipt({ rcpt, products, onClose }) {
-  // Print: open a clean white popup with just the receipt
   const doPrint = () => {
     const content = document.getElementById("stow-receipt-body");
     if (!content) return window.print();
     const w = window.open("","_blank","width=420,height=700");
-    w.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Bill #${rcpt.id.slice(-8).toUpperCase()}</title>
-        <style>
-          body { margin: 0; padding: 20px; font-family: 'Courier New', monospace; background: #fff; color: #111; }
-          table { width: 100%; border-collapse: collapse; font-size: 12px; }
-          th, td { padding: 3px 0; }
-          @media print { button { display: none; } }
-        </style>
-      </head>
-      <body>
-        ${content.innerHTML}
-        <script>window.onload=()=>{window.print();}<\/script>
-      </body>
-      </html>
-    `);
+    w.document.write(`<!DOCTYPE html><html><head><title>Bill #${rcpt.id.slice(-8).toUpperCase()}</title>
+      <style>body{margin:0;padding:20px;font-family:'Courier New',monospace;background:#fff;color:#111}
+      table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:3px 0}
+      @media print{button{display:none}}</style></head>
+      <body>${content.innerHTML}<script>window.onload=()=>{window.print()}<\/script></body></html>`);
     w.document.close();
   };
 
   return (
-    <div style={{maxWidth:360,margin:"0 auto",paddingTop:20}}>
-      {/* ── Receipt body – white card ── */}
-      <div id="stow-receipt-body" style={{background:"#fff",color:"#111",padding:24,borderRadius:10,fontFamily:"'Courier New',monospace",fontSize:12}}>
+    <div style={{maxWidth:380,margin:"0 auto",paddingTop:16}}>
+      <div id="stow-receipt-body" style={{background:"#fff",color:"#111",padding:24,borderRadius:12,fontFamily:"'Courier New',monospace",fontSize:12}}>
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>STOW</div>
           <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
@@ -825,18 +934,14 @@ function Receipt({ rcpt, products, onClose }) {
             Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
           </div>
         </div>
-
         <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>{rcpt.customerName}</div>
-
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-          <thead>
-            <tr style={{borderBottom:"1px dashed #ccc"}}>
-              <th style={{textAlign:"left",padding:"3px 0",fontWeight:600}}>Item</th>
-              <th style={{textAlign:"center",fontWeight:600}}>Qty</th>
-              <th style={{textAlign:"right",fontWeight:600}}>Rate</th>
-              <th style={{textAlign:"right",fontWeight:600}}>Amt</th>
-            </tr>
-          </thead>
+          <thead><tr style={{borderBottom:"1px dashed #ccc"}}>
+            <th style={{textAlign:"left",padding:"3px 0",fontWeight:600}}>Item</th>
+            <th style={{textAlign:"center",fontWeight:600}}>Qty</th>
+            <th style={{textAlign:"right",fontWeight:600}}>Rate</th>
+            <th style={{textAlign:"right",fontWeight:600}}>Amt</th>
+          </tr></thead>
           <tbody>
             {(rcpt.items||[]).map((item,i)=>{
               const p=products.find(x=>x.id===item.productId);
@@ -851,7 +956,6 @@ function Receipt({ rcpt, products, onClose }) {
             })}
           </tbody>
         </table>
-
         <div style={{marginTop:10,borderTop:"1px dashed #ccc",paddingTop:8}}>
           <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:14}}><span>Total</span><span>{fmt(rcpt.total)}</span></div>
           <div style={{display:"flex",justifyContent:"space-between",color:"#555",fontSize:13}}><span>Paid</span><span>{fmt(rcpt.paid)}</span></div>
@@ -862,42 +966,29 @@ function Receipt({ rcpt, products, onClose }) {
         {rcpt.note&&<div style={{marginTop:8,fontSize:11,color:"#777"}}>Note: {rcpt.note}</div>}
         <div style={{textAlign:"center",marginTop:12,fontSize:10,color:"#aaa",borderTop:"1px dashed #ccc",paddingTop:8}}>Thank you! Visit again.</div>
       </div>
-
-      {/* ── Action buttons — SEPARATE Print & Close ── */}
       <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:16}} className="no-print">
-        {/* PRINT button — opens clean popup */}
-        <button style={{...C.btnP,padding:"10px 22px",fontSize:14}} onClick={doPrint}>
-          <I n="print" s={15}/> Print Bill
-        </button>
-        {/* CLOSE button — goes back to sale form */}
-        <button style={{...C.btnG,padding:"10px 18px",fontSize:14}} onClick={onClose}>
-          <I n="close" s={14}/> Close
-        </button>
-      </div>
-
-      <div style={{textAlign:"center",marginTop:10,fontSize:11,color:"#475569"}}>
-        🖨 Print opens a clean white receipt popup<br/>that won't include the dark app background
+        <button style={{...C.btnP,padding:"12px 24px",fontSize:14,flex:1,justifyContent:"center",minHeight:50}} onClick={doPrint}><I n="print" s={15}/> Print Bill</button>
+        <button style={{...C.btnG,padding:"12px 18px",fontSize:14,flex:1,justifyContent:"center",minHeight:50}} onClick={onClose}><I n="close" s={14}/> Close</button>
       </div>
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Customers — with EDIT + DEBT ADJUSTMENT
+   Customers — mobile card view
 ══════════════════════════════════════════════════════════════ */
-function Customers({ data, refresh }) {
+function Customers({ data, refresh, isMobile }) {
   const blank = {name:"",phone:"",address:""};
   const [form,    setForm]    = useState(blank);
   const [show,    setShow]    = useState(false);
   const [busy,    setBusy]    = useState(false);
-  const [editC,   setEditC]   = useState(null);   // customer being edited
-  const [debtC,   setDebtC]   = useState(null);   // customer whose debt is being adjusted
+  const [editC,   setEditC]   = useState(null);
+  const [debtC,   setDebtC]   = useState(null);
   const [debtVal, setDebtVal] = useState("");
-  const [debtMode,setDebtMode]= useState("set");  // "set" | "add" | "sub"
+  const [debtMode,setDebtMode]= useState("set");
   const [srch,    setSrch]    = useState("");
   const [t, toast] = useToast();
 
-  /* ── Add new customer ── */
   const add = async () => {
     if (!form.name) return toast("Enter customer name","err");
     setBusy(true);
@@ -905,7 +996,6 @@ function Customers({ data, refresh }) {
     finally { setBusy(false); }
   };
 
-  /* ── Save edited customer info ── */
   const saveEdit = async () => {
     if (!editC) return;
     setBusy(true);
@@ -915,7 +1005,6 @@ function Customers({ data, refresh }) {
     } finally { setBusy(false); }
   };
 
-  /* ── Adjust debt manually ── */
   const saveDebt = async () => {
     if (!debtC) return;
     const val = parseFloat(debtVal);
@@ -944,64 +1033,59 @@ function Customers({ data, refresh }) {
     c.name?.toLowerCase().includes(srch.toLowerCase())||(c.phone||"").includes(srch)
   );
 
+  const formCols = isMobile ? {display:"flex",flexDirection:"column",gap:12} : C.g3;
+
   return (
     <div style={C.pg}>
       <Toast t={t}/>
-
       <div style={C.phdr}>
-        <h1 style={C.h1}>Customers / Dealers <span style={{fontSize:13,color:"#64748b",fontWeight:400}}>({data.customers.length})</span></h1>
-        <button style={C.btnP} onClick={()=>{setShow(s=>!s);setEditC(null);setDebtC(null);setForm(blank);}}><I n="plus" s={14}/> Add</button>
+        <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Customers <span style={{fontSize:13,color:"#64748b",fontWeight:400}}>({data.customers.length})</span></h1>
+        <button style={{...C.btnP,minHeight:44}} onClick={()=>{setShow(s=>!s);setEditC(null);setDebtC(null);setForm(blank);}}><I n="plus" s={14}/> Add</button>
       </div>
 
-      {/* ── Add form ── */}
       {show&&!editC&&(
-        <div style={{...C.card,marginBottom:16}}>
+        <div style={{...C.card,marginBottom:14}}>
           <ST>New Customer / Dealer</ST>
-          <div style={C.g3}>
+          <div style={formCols}>
             <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
             <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
             <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
           </div>
-          <div style={{display:"flex",gap:8,marginTop:10}}>
-            <button style={C.btnP} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
-            <button style={C.btnG} onClick={()=>setShow(false)}>Cancel</button>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setShow(false)}>Cancel</button>
           </div>
         </div>
       )}
 
-      {/* ── Edit customer info ── */}
       {editC&&(
-        <div style={{...C.card,marginBottom:16,borderTop:"3px solid #f59e0b"}}>
-          <ST>Edit Customer: {editC.name}</ST>
-          <div style={C.g3}>
+        <div style={{...C.card,marginBottom:14,borderTop:"3px solid #f59e0b"}}>
+          <ST>Edit: {editC.name}</ST>
+          <div style={formCols}>
             <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
             <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
             <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
           </div>
-          <div style={{display:"flex",gap:8,marginTop:10}}>
-            <button style={C.btnP} onClick={saveEdit} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Update"}</button>
-            <button style={C.btnG} onClick={()=>setEditC(null)}><I n="close" s={14}/> Cancel</button>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={saveEdit} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Update"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setEditC(null)}><I n="close" s={14}/> Cancel</button>
           </div>
         </div>
       )}
 
-      {/* ── Adjust debt ── */}
       {debtC&&(
-        <div style={{...C.card,marginBottom:16,borderTop:"3px solid #ef4444"}}>
-          <ST>Adjust Debt for: {debtC.name}</ST>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,padding:"10px 14px",background:"#0d1117",borderRadius:8}}>
+        <div style={{...C.card,marginBottom:14,borderTop:"3px solid #ef4444"}}>
+          <ST>Adjust Debt: {debtC.name}</ST>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,padding:"12px 14px",background:"#0d1117",borderRadius:10}}>
             <span style={{color:"#94a3b8",fontSize:13}}>Current Debt:</span>
-            <span style={{fontWeight:800,fontSize:22,color:"#f87171"}}>{fmt(debtC.debt||0)}</span>
+            <span style={{fontWeight:800,fontSize:24,color:"#f87171"}}>{fmt(debtC.debt||0)}</span>
           </div>
-
-          {/* Mode selector */}
-          <div style={{display:"flex",gap:6,marginBottom:12}}>
-            {[["set","Set Exact Amount"],["add","Add to Debt"],["sub","Reduce Debt"]].map(([m,l])=>(
-              <button key={m} style={{...(debtMode===m?C.btnP:C.btnG),fontSize:12,padding:"6px 12px"}} onClick={()=>setDebtMode(m)}>{l}</button>
+          <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+            {[["set","Set Amount"],["add","Add Debt"],["sub","Reduce"]].map(([m,l])=>(
+              <button key={m} style={{...(debtMode===m?C.btnP:C.btnG),fontSize:12,padding:"8px 14px",flex:1,justifyContent:"center"}} onClick={()=>setDebtMode(m)}>{l}</button>
             ))}
           </div>
-
-          <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
+          <div style={{display:"flex",gap:10,alignItems:"flex-end",marginBottom:8}}>
             <div style={{flex:1}}>
               <label style={C.lbl}>
                 {debtMode==="set"?"New Debt Amount ₹":debtMode==="add"?"Amount to Add ₹":"Amount to Reduce ₹"}
@@ -1009,64 +1093,75 @@ function Customers({ data, refresh }) {
               <input style={C.inp} type="number" min="0" value={debtVal} onChange={e=>setDebtVal(e.target.value)} placeholder="0.00"/>
             </div>
             {debtMode!=="set"&&debtVal&&(
-              <div style={{padding:"8px 14px",background:"#0d1117",borderRadius:8,fontSize:13,color:"#94a3b8",whiteSpace:"nowrap"}}>
-                Result: <b style={{color:debtMode==="add"?"#f87171":"#34d399"}}>
+              <div style={{padding:"10px 14px",background:"#0d1117",borderRadius:8,fontSize:13,color:"#94a3b8",flexShrink:0}}>
+                → <b style={{color:debtMode==="add"?"#f87171":"#34d399"}}>
                   {fmt(Math.max(0,(debtC.debt||0)+(debtMode==="add"?+debtVal:-+debtVal)))}
                 </b>
               </div>
             )}
           </div>
-
-          <div style={{fontSize:11,color:"#64748b",marginTop:8,marginBottom:12}}>
-            {debtMode==="set"&&"This will directly set the customer's debt to the value you enter."}
-            {debtMode==="add"&&"Use this if they bought more on credit or you want to manually add debt."}
-            {debtMode==="sub"&&"Use this to manually reduce debt (e.g. cash collected outside the system)."}
-          </div>
-
-          <div style={{display:"flex",gap:8}}>
-            <button style={C.btnP} onClick={saveDebt} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save Debt"}</button>
-            <button style={C.btnG} onClick={()=>setDebtC(null)}><I n="close" s={14}/> Cancel</button>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={saveDebt} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setDebtC(null)}><I n="close" s={14}/> Cancel</button>
           </div>
         </div>
       )}
 
-      {/* ── Search ── */}
       <input style={C.srch} placeholder="Search by name or phone…" value={srch} onChange={e=>setSrch(e.target.value)}/>
 
-      {/* ── Table ── */}
-      <div style={C.tbl}>
-        <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 2fr 120px 110px"}}>
-          <span>Name</span><span>Phone</span><span>Address</span><span>Debt</span><span>Actions</span>
+      {/* ── Mobile: cards ── */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filtered.length===0?<MT text="No customers yet"/>:filtered.map(c=>(
+            <div key={c.id} style={{...C.card,padding:"14px 14px",borderLeft:`3px solid ${c.debt>0?"#ef4444":"#10b981"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:15,color:"#f0f6ff"}}>{c.name}</div>
+                  <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{c.phone||"No phone"}</div>
+                  {c.address&&<div style={{color:"#475569",fontSize:11,marginTop:1}}>{c.address}</div>}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
+                  <div style={{fontWeight:800,fontSize:18,color:c.debt>0?"#f87171":"#34d399"}}>{c.debt>0?fmt(c.debt):"Clear ✓"}</div>
+                  {c.debt>0&&<div style={{fontSize:10,color:"#64748b",marginTop:1}}>outstanding</div>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button style={{...C.iBtn,flex:1,justifyContent:"center",padding:"9px 0",color:"#94a3b8",fontSize:12,gap:5}} onClick={()=>openEdit(c)}><I n="edit" s={14}/> Edit Info</button>
+                <button style={{...C.iBtn,flex:1,justifyContent:"center",padding:"9px 0",color:"#f59e0b",borderColor:"rgba(245,158,11,.3)",fontSize:12,gap:5}} onClick={()=>openDebt(c)}><I n="money" s={14}/> Adj. Debt</button>
+                <button style={{...C.iBtn,padding:"9px 12px",color:"#f87171"}} onClick={()=>del(c.id)}><I n="trash" s={15}/></button>
+              </div>
+            </div>
+          ))}
         </div>
-        {filtered.length===0?<MT text="No customers yet"/>:filtered.map(c=>(
-          <div key={c.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 2fr 120px 110px"}}>
-            <span style={{fontWeight:600,color:"#f0f6ff"}}>{c.name}</span>
-            <span style={{color:"#94a3b8",fontSize:12}}>{c.phone||"—"}</span>
-            <span style={{color:"#94a3b8",fontSize:12}}>{c.address||"—"}</span>
-            <span>
-              <span style={{fontWeight:700,color:c.debt>0?"#f87171":"#34d399",fontSize:13}}>
-                {c.debt>0?fmt(c.debt):"Clear ✓"}
-              </span>
-            </span>
-            <span style={{display:"flex",gap:5}}>
-              {/* Edit info */}
-              <button style={{...C.iBtn,color:"#94a3b8"}} title="Edit customer info" onClick={()=>openEdit(c)}><I n="edit" s={13}/></button>
-              {/* Edit debt */}
-              <button style={{...C.iBtn,color:"#f59e0b",borderColor:"rgba(245,158,11,.3)"}} title="Adjust debt" onClick={()=>openDebt(c)}><I n="money" s={13}/></button>
-              {/* Delete */}
-              <button style={{...C.iBtn,color:"#f87171"}} title="Delete customer" onClick={()=>del(c.id)}><I n="trash" s={13}/></button>
-            </span>
+      ) : (
+        /* ── Desktop: table ── */
+        <div style={C.tbl}>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 2fr 120px 110px"}}>
+            <span>Name</span><span>Phone</span><span>Address</span><span>Debt</span><span>Actions</span>
           </div>
-        ))}
-      </div>
+          {filtered.length===0?<MT text="No customers yet"/>:filtered.map(c=>(
+            <div key={c.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 2fr 120px 110px"}}>
+              <span style={{fontWeight:600,color:"#f0f6ff"}}>{c.name}</span>
+              <span style={{color:"#94a3b8",fontSize:12}}>{c.phone||"—"}</span>
+              <span style={{color:"#94a3b8",fontSize:12}}>{c.address||"—"}</span>
+              <span><span style={{fontWeight:700,color:c.debt>0?"#f87171":"#34d399",fontSize:13}}>{c.debt>0?fmt(c.debt):"Clear ✓"}</span></span>
+              <span style={{display:"flex",gap:5}}>
+                <button style={{...C.iBtn,color:"#94a3b8"}} onClick={()=>openEdit(c)}><I n="edit" s={13}/></button>
+                <button style={{...C.iBtn,color:"#f59e0b",borderColor:"rgba(245,158,11,.3)"}} onClick={()=>openDebt(c)}><I n="money" s={13}/></button>
+                <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(c.id)}><I n="trash" s={13}/></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Debts
+   Debts — already card-based, minor mobile improvements
 ══════════════════════════════════════════════════════════════ */
-function Debts({ data, refresh }) {
+function Debts({ data, refresh, isMobile }) {
   const [amt, setAmt] = useState({});
   const [t, toast] = useToast();
   const debtors   = data.customers.filter(c=>c.debt>0).sort((a,b)=>b.debt-a.debt);
@@ -1084,33 +1179,34 @@ function Debts({ data, refresh }) {
   return (
     <div style={C.pg}>
       <Toast t={t}/>
-      <h1 style={C.h1}>Debt Management</h1>
+      <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Debt Management</h1>
       {totalDebt>0&&(
-        <div style={{...C.card,marginBottom:16,padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{...C.card,marginBottom:14,padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"3px solid #ef4444"}}>
           <span style={{color:"#94a3b8",fontSize:13}}>Total Outstanding</span>
-          <span style={{fontWeight:800,fontSize:22,color:"#f87171"}}>{fmt(totalDebt)}</span>
+          <span style={{fontWeight:800,fontSize:24,color:"#f87171"}}>{fmt(totalDebt)}</span>
         </div>
       )}
       {debtors.length===0
-        ? <div style={{...C.card,textAlign:"center",padding:48}}><div style={{fontSize:36,marginBottom:8}}>✅</div><div style={{color:"#64748b",fontSize:14}}>No outstanding debts!</div></div>
+        ? <div style={{...C.card,textAlign:"center",padding:48}}><div style={{fontSize:40,marginBottom:8}}>✅</div><div style={{color:"#64748b",fontSize:14}}>No outstanding debts!</div></div>
         : debtors.map(c=>(
           <div key={c.id} style={{...C.card,marginBottom:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <div>
                 <div style={{fontWeight:700,fontSize:16,color:"#f0f6ff"}}>{c.name}</div>
-                <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{c.phone||"No phone"} {c.address?`· ${c.address}`:""}</div>
+                <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{c.phone||"No phone"}</div>
               </div>
-              <div style={{fontWeight:800,fontSize:26,color:"#f87171"}}>{fmt(c.debt)}</div>
+              <div style={{fontWeight:800,fontSize:isMobile?22:26,color:"#f87171"}}>{fmt(c.debt)}</div>
             </div>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <input style={{...C.inp,flex:1}} type="number" placeholder="Collection amount ₹" value={amt[c.id]||""} onChange={e=>setAmt(p=>({...p,[c.id]:e.target.value}))}/>
-              <button style={{...C.btnG,padding:"8px 12px",fontSize:12}} onClick={()=>setAmt(p=>({...p,[c.id]:String(c.debt)}))}>Full</button>
-              <button style={C.btnP} onClick={()=>collect(c.id)}><I n="check" s={14}/> Collect</button>
+            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:isMobile?"wrap":"nowrap"}}>
+              <input style={{...C.inp,flex:1,minWidth:0}} type="number" placeholder="Collection amount ₹"
+                value={amt[c.id]||""} onChange={e=>setAmt(p=>({...p,[c.id]:e.target.value}))}/>
+              <button style={{...C.btnG,padding:"10px 14px",fontSize:13,minHeight:44,flexShrink:0}} onClick={()=>setAmt(p=>({...p,[c.id]:String(c.debt)}))}>Full</button>
+              <button style={{...C.btnP,minHeight:44,flexShrink:0}} onClick={()=>collect(c.id)}><I n="check" s={14}/> Collect</button>
             </div>
-            <div style={{marginTop:8}}>
-              <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Payment history:</div>
+            <div>
+              <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Payment history:</div>
               {data.debtPayments.filter(p=>p.customer_id===c.id).slice(0,5).map(p=>(
-                <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748b",padding:"2px 0"}}>
+                <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748b",padding:"3px 0"}}>
                   <span>{fmtDate(p.date)}</span>
                   <span style={{color:"#34d399",fontWeight:600}}>+{fmt(p.amount)} collected</span>
                 </div>
@@ -1124,9 +1220,9 @@ function Debts({ data, refresh }) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Expenses
+   Expenses — mobile improvements
 ══════════════════════════════════════════════════════════════ */
-function Expenses({ data, refresh }) {
+function Expenses({ data, refresh, isMobile }) {
   const blank = {date:today(),amount:"",description:"salary"};
   const [form, setForm] = useState(blank);
   const [show, setShow] = useState(false);
@@ -1150,19 +1246,19 @@ function Expenses({ data, refresh }) {
     <div style={C.pg}>
       <Toast t={t}/>
       <div style={C.phdr}>
-        <h1 style={C.h1}>Daily Expenses</h1>
-        <button style={C.btnP} onClick={()=>setShow(true)}><I n="plus" s={14}/> Add Expense</button>
+        <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Expenses</h1>
+        <button style={{...C.btnP,minHeight:44}} onClick={()=>setShow(true)}><I n="plus" s={14}/> Add</button>
       </div>
-      <div style={{...C.g4,marginBottom:16}}>
-        <StatC label="This Month Total" val={fmt(monthTotal)} sub={`${monthExp.length} entries`} acc="#818cf8"/>
-        {Object.entries(byCat).slice(0,3).map(([k,v])=>(
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        <StatC label="This Month" val={fmt(monthTotal)} sub={`${monthExp.length} entries`} acc="#818cf8"/>
+        {Object.entries(byCat).slice(0,isMobile?1:3).map(([k,v])=>(
           <StatC key={k} label={k.charAt(0).toUpperCase()+k.slice(1)} val={fmt(v)} sub="this month" acc="#64748b"/>
         ))}
       </div>
       {show&&(
-        <div style={{...C.card,marginBottom:16}}>
+        <div style={{...C.card,marginBottom:14}}>
           <ST>Add Expense</ST>
-          <div style={C.g3}>
+          <div style={isMobile?{display:"flex",flexDirection:"column",gap:12}:C.g3}>
             <Fld label="Date" type="date" value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/>
             <Fld label="Amount ₹ *" type="number" value={form.amount} onChange={v=>setForm(f=>({...f,amount:v}))}/>
             <div>
@@ -1172,33 +1268,50 @@ function Expenses({ data, refresh }) {
               </select>
             </div>
           </div>
-          <div style={{display:"flex",gap:8,marginTop:10}}>
-            <button style={C.btnP} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
-            <button style={C.btnG} onClick={()=>setShow(false)}>Cancel</button>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setShow(false)}>Cancel</button>
           </div>
         </div>
       )}
-      <div style={C.tbl}>
-        <div style={{...C.tr,...C.th,gridTemplateColumns:"150px 1fr 110px 60px"}}>
-          <span>Date</span><span>Type</span><span>Amount</span><span>Del</span>
+
+      {/* Mobile card view */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>(
+            <div key={e.id} style={{...C.card,padding:"12px 14px",display:"flex",alignItems:"center",gap:12}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:14,color:"#cbd5e1",textTransform:"capitalize"}}>{e.description}</div>
+                <div style={{color:"#64748b",fontSize:11,marginTop:2}}>{fmtDate(e.date)}</div>
+              </div>
+              <div style={{fontWeight:700,fontSize:16,color:"#818cf8",flexShrink:0}}>{fmt(e.amount)}</div>
+              <button style={{...C.iBtn,color:"#f87171",padding:"8px 10px",flexShrink:0}} onClick={()=>del(e.id)}><I n="trash" s={15}/></button>
+            </div>
+          ))}
         </div>
-        {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>(
-          <div key={e.id} style={{...C.tr,gridTemplateColumns:"150px 1fr 110px 60px"}}>
-            <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(e.date)}</span>
-            <span style={{textTransform:"capitalize",color:"#cbd5e1"}}>{e.description}</span>
-            <span style={{color:"#818cf8",fontWeight:600}}>{fmt(e.amount)}</span>
-            <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(e.id)}><I n="trash" s={13}/></button>
+      ) : (
+        <div style={C.tbl}>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"150px 1fr 110px 60px"}}>
+            <span>Date</span><span>Type</span><span>Amount</span><span>Del</span>
           </div>
-        ))}
-      </div>
+          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>(
+            <div key={e.id} style={{...C.tr,gridTemplateColumns:"150px 1fr 110px 60px"}}>
+              <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(e.date)}</span>
+              <span style={{textTransform:"capitalize",color:"#cbd5e1"}}>{e.description}</span>
+              <span style={{color:"#818cf8",fontWeight:600}}>{fmt(e.amount)}</span>
+              <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(e.id)}><I n="trash" s={13}/></button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Reports
+   Reports — mobile card view for sales list
 ══════════════════════════════════════════════════════════════ */
-function Reports({ data, refresh }) {
+function Reports({ data, refresh, isMobile }) {
   const [range,  setRange]  = useState("today");
   const [from,   setFrom]   = useState(today());
   const [to,     setTo]     = useState(today());
@@ -1222,16 +1335,13 @@ function Reports({ data, refresh }) {
   const expTotal = exps.reduce((a,e)=>a+e.amount,0);
   const netProfit= gProfit-expTotal;
 
-  // Cancel / delete a bill
   const cancelSale = async s => {
     const name=data.customers.find(c=>c.id===s.customer_id)?.name||s.walk_in_name||"Walk-in";
-    if (!confirm(`Cancel bill for ${name} (${fmt(s.total)})?\n• Stock will be restored\n• Customer debt will be reduced\n• Bill deleted permanently`)) return;
-    // Restore stock
+    if (!confirm(`Cancel bill for ${name} (${fmt(s.total)})?\n• Stock will be restored\n• Customer debt reduced\n• Bill deleted`)) return;
     for (const item of (s.items||[])) {
       const p=data.products.find(x=>x.id===item.productId);
       if (p) await sb.upsert("products",{...p,stock:p.stock+item.qty});
     }
-    // Reduce customer debt
     if (s.customer_id) {
       const c=data.customers.find(x=>x.id===s.customer_id);
       if (c) await sb.upsert("customers",{...c,debt:Math.max(0,(c.debt||0)-Math.max(0,s.total-s.paid))});
@@ -1245,33 +1355,38 @@ function Reports({ data, refresh }) {
   return (
     <div style={C.pg}>
       <Toast t={t}/>
-      <h1 style={C.h1}>Reports & Statements</h1>
+      <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Reports</h1>
 
-      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-        {[["today","Today"],["week","Last 7 Days"],["month","This Month"],["custom","Custom"]].map(([v,l])=>(
-          <button key={v} style={range===v?C.btnP:C.btnG} onClick={()=>setRange(v)}>{l}</button>
+      {/* Range selector */}
+      <div style={{display:"flex",gap:7,marginBottom:14,flexWrap:"wrap"}}>
+        {[["today","Today"],["week","7 Days"],["month","Month"],["custom","Custom"]].map(([v,l])=>(
+          <button key={v} style={{...(range===v?C.btnP:C.btnG),flex:isMobile?"1 1 auto":"0 0 auto",justifyContent:"center",minHeight:42}} onClick={()=>setRange(v)}>{l}</button>
         ))}
-        {range==="custom"&&<>
-          <input style={{...C.inp,width:130}} type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
-          <span style={{color:"#64748b"}}>→</span>
-          <input style={{...C.inp,width:130}} type="date" value={to} onChange={e=>setTo(e.target.value)}/>
-        </>}
+      </div>
+      {range==="custom"&&(
+        <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+          <input style={{...C.inp,flex:"1 1 130px"}} type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
+          <span style={{color:"#64748b",flexShrink:0}}>→</span>
+          <input style={{...C.inp,flex:"1 1 130px"}} type="date" value={to} onChange={e=>setTo(e.target.value)}/>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        <StatC label="Revenue"   val={fmt(revenue)}   sub={`${sales.length} sales`}   acc="#f59e0b"/>
+        <StatC label="Gross P."  val={fmt(gProfit)}   sub="Before expenses"            acc="#10b981"/>
+        <StatC label="Expenses"  val={fmt(expTotal)}  sub="All types"                  acc="#818cf8"/>
+        <StatC label="Net Profit" val={fmt(netProfit)} sub="Take-home"                 acc={netProfit>=0?"#10b981":"#ef4444"}/>
       </div>
 
-      <div style={C.g4}>
-        <StatC label="Total Revenue"  val={fmt(revenue)}   sub={`${sales.length} sales`}   acc="#f59e0b"/>
-        <StatC label="Gross Profit"   val={fmt(gProfit)}   sub="Before expenses"            acc="#10b981"/>
-        <StatC label="Total Expenses" val={fmt(expTotal)}  sub="Salary + rent + others"     acc="#818cf8"/>
-        <StatC label="Net Profit"     val={fmt(netProfit)} sub="Final take-home"             acc={netProfit>=0?"#10b981":"#ef4444"}/>
-      </div>
-
-      <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
-        <div style={{...C.card,flex:"1 1 200px",padding:"12px 18px"}}>
+      {/* Collections + breakdown */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:14}}>
+        <div style={{...C.card,padding:"12px 16px"}}>
           <ST>Collections</ST>
           <SRow l="Cash Collected" v={fmt(collected)} c="#34d399"/>
           <SRow l="Pending"        v={fmt(pending)}   c="#f87171"/>
         </div>
-        <div style={{...C.card,flex:"1 1 200px",padding:"12px 18px"}}>
+        <div style={{...C.card,padding:"12px 16px"}}>
           <ST>Expense Breakdown</ST>
           {Object.entries(exps.reduce((a,e)=>{a[e.description]=(a[e.description]||0)+e.amount;return a;},{})).map(([k,v])=>(
             <SRow key={k} l={k} v={fmt(v)}/>
@@ -1280,34 +1395,65 @@ function Reports({ data, refresh }) {
         </div>
       </div>
 
-      <div style={C.tbl}>
-        <div style={{...C.tr,...C.th,gridTemplateColumns:"120px 1fr 60px 90px 90px 90px 80px"}}>
-          <span>Date</span><span>Customer</span><span>Items</span><span>Total</span><span>Paid</span><span>Balance</span><span>Actions</span>
+      {/* Sales list */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{color:"#475569",fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>Sales in period ({sales.length})</div>
+          {sales.length===0?<MT text="No sales in this period"/>:sales.map(s=>{
+            const c=data.customers.find(x=>x.id===s.customer_id);
+            const bal=s.total-s.paid;
+            return (
+              <div key={s.id} style={{...C.card,padding:"12px 14px",borderLeft:`3px solid ${bal>0?"#f87171":"#10b981"}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:14,color:"#f0f6ff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.name||s.walk_in_name||"Walk-in"}</div>
+                    <div style={{color:"#64748b",fontSize:11,marginTop:2}}>{fmtDate(s.date)} · {(s.items||[]).length} items</div>
+                  </div>
+                  <div style={{fontWeight:800,fontSize:16,color:"#f59e0b",flexShrink:0,marginLeft:10}}>{fmt(s.total)}</div>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontSize:12}}>
+                    <span style={{color:"#34d399"}}>Paid {fmt(s.paid)}</span>
+                    {bal>0&&<span style={{color:"#f87171",marginLeft:8}}>· Due {fmt(bal)}</span>}
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button style={{...C.iBtn,color:"#94a3b8",padding:"7px 10px"}}
+                      onClick={()=>setReprint({...s,customerName:c?.name||s.walk_in_name||"Walk-in"})}>
+                      <I n="print" s={15}/>
+                    </button>
+                    <button style={{...C.iBtn,color:"#f87171",padding:"7px 10px"}} onClick={()=>cancelSale(s)}>
+                      <I n="trash" s={15}/>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        {sales.length===0?<MT text="No sales in this period"/>:sales.map(s=>{
-          const c=data.customers.find(x=>x.id===s.customer_id);
-          return (
-            <div key={s.id} style={{...C.tr,gridTemplateColumns:"120px 1fr 60px 90px 90px 90px 80px"}}>
-              <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(s.date)}</span>
-              <span style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{c?.name||s.walk_in_name||"Walk-in"}</span>
-              <span style={{color:"#64748b"}}>{(s.items||[]).length}</span>
-              <span style={{fontWeight:700,color:"#e2e8f0"}}>{fmt(s.total)}</span>
-              <span style={{color:"#34d399"}}>{fmt(s.paid)}</span>
-              <span style={{color:s.total-s.paid>0?"#f87171":"#34d399"}}>{fmt(s.total-s.paid)}</span>
-              <span style={{display:"flex",gap:5}}>
-                <button style={{...C.iBtn,color:"#94a3b8"}} title="Reprint bill"
-                  onClick={()=>setReprint({...s,customerName:c?.name||s.walk_in_name||"Walk-in"})}>
-                  <I n="print" s={13}/>
-                </button>
-                <button style={{...C.iBtn,color:"#f87171"}} title="Cancel / delete bill"
-                  onClick={()=>cancelSale(s)}>
-                  <I n="trash" s={13}/>
-                </button>
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      ) : (
+        <div style={C.tbl}>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"120px 1fr 60px 90px 90px 90px 80px"}}>
+            <span>Date</span><span>Customer</span><span>Items</span><span>Total</span><span>Paid</span><span>Balance</span><span>Actions</span>
+          </div>
+          {sales.length===0?<MT text="No sales in this period"/>:sales.map(s=>{
+            const c=data.customers.find(x=>x.id===s.customer_id);
+            return (
+              <div key={s.id} style={{...C.tr,gridTemplateColumns:"120px 1fr 60px 90px 90px 90px 80px"}}>
+                <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(s.date)}</span>
+                <span style={{fontWeight:600,fontSize:13,color:"#f0f6ff"}}>{c?.name||s.walk_in_name||"Walk-in"}</span>
+                <span style={{color:"#64748b"}}>{(s.items||[]).length}</span>
+                <span style={{fontWeight:700,color:"#e2e8f0"}}>{fmt(s.total)}</span>
+                <span style={{color:"#34d399"}}>{fmt(s.paid)}</span>
+                <span style={{color:s.total-s.paid>0?"#f87171":"#34d399"}}>{fmt(s.total-s.paid)}</span>
+                <span style={{display:"flex",gap:5}}>
+                  <button style={{...C.iBtn,color:"#94a3b8"}} onClick={()=>setReprint({...s,customerName:c?.name||s.walk_in_name||"Walk-in"})}><I n="print" s={13}/></button>
+                  <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>cancelSale(s)}><I n="trash" s={13}/></button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1315,7 +1461,7 @@ function Reports({ data, refresh }) {
 /* ══════════════════════════════════════════════════════════════
    Import Data
 ══════════════════════════════════════════════════════════════ */
-function ImportData({ data, refresh }) {
+function ImportData({ data, refresh, isMobile }) {
   const [busy,   setBusy]   = useState(false);
   const [status, setStatus] = useState("");
   const [pct,    setPct]    = useState(0);
@@ -1339,48 +1485,41 @@ function ImportData({ data, refresh }) {
       setStatus("Reading Excel file…");
       const buf = await file.arrayBuffer();
       const wb  = XLSX.read(buf,{type:"array",cellDates:true});
-      addLog(`Sheets found: ${wb.SheetNames.join(", ")}`);
+      addLog(`Sheets: ${wb.SheetNames.join(", ")}`);
 
       if (wb.SheetNames.includes("Inventory")) {
         setStatus("Importing inventory…"); setPct(0);
         const rows=XLSX.utils.sheet_to_json(wb.Sheets["Inventory"]);
         const valid=rows.filter(r=>r["Product Name"]&&r["Selling Price"]&&!String(r["Product Name"]).startsWith("="));
-        addLog(`Found ${valid.length} inventory rows`);
         const prods=valid.map(r=>({id:uid(),name:String(r["Product Name"]).trim(),category:String(r["Category"]||"").trim(),buy_price:Number(r["Buying Price"]||0),sell_price:Number(r["Selling Price"]||0),stock:Number(r["Stock"]||0),unit:String(r["Unit"]||"pcs").trim()}));
         await chunk("products",prods,20);
         addLog(`✓ ${prods.length} products imported`,"ok");
       }
-
       if (wb.SheetNames.includes("Dealers")) {
         setStatus("Importing customers…"); setPct(0);
         const rows=XLSX.utils.sheet_to_json(wb.Sheets["Dealers"]);
         const valid=rows.filter(r=>r["Name"]&&!String(r["Name"]).startsWith("="));
-        addLog(`Found ${valid.length} customer rows`);
         const custs=valid.map(r=>({id:uid(),name:String(r["Name"]).trim(),phone:String(r["Phone"]||"").trim(),address:String(r["Address"]||"").trim(),debt:Number(r["Debt"]||0)}));
         await chunk("customers",custs,20);
         addLog(`✓ ${custs.length} customers imported`,"ok");
       }
-
       if (wb.SheetNames.includes("Salary")) {
         setStatus("Importing expenses…"); setPct(0);
         const rows=XLSX.utils.sheet_to_json(wb.Sheets["Salary"],{raw:false});
         const valid=rows.filter(r=>r["Amount"]&&r["Date"]&&!String(r["Amount"]).startsWith("="));
-        addLog(`Found ${valid.length} expense rows`);
         const exps=valid.map(r=>({id:uid(),date:toISO(r["Date"]),amount:Number(r["Amount"]||0),description:String(r["Type"]||"salary").toLowerCase().trim(),created_at:Date.now()}));
         await chunk("expenses",exps,20);
         addLog(`✓ ${exps.length} expenses imported`,"ok");
       }
-
       if (wb.SheetNames.includes("Sales")) {
         setStatus("Importing sales…"); setPct(0);
         const rows=XLSX.utils.sheet_to_json(wb.Sheets["Sales"],{raw:false});
         const valid=rows.filter(r=>r["Product Name"]&&!String(r["Product Name"]).startsWith("=")&&r["Date"]);
-        addLog(`Found ${valid.length} sale rows, grouping by date…`);
         const pMap={};
         data.products.forEach(p=>{pMap[p.name.trim().toLowerCase()]=p.id;});
         const grouped={};
         valid.forEach(r=>{ const d=toISO(r["Date"]); if(!grouped[d]) grouped[d]=[]; grouped[d].push(r); });
-        const sales=Object.entries(grouped).map(([date,items])=>({
+        const saleDocs=Object.entries(grouped).map(([date,items])=>({
           id:uid(),date,created_at:new Date(date).getTime()||Date.now(),
           customer_id:null,walk_in_name:null,
           items:items.map(r=>({productId:pMap[String(r["Product Name"]).trim().toLowerCase()]||uid(),qty:Number(r["Quantity"]||1),price:Number(r["Selling Price"]||0)})),
@@ -1388,10 +1527,9 @@ function ImportData({ data, refresh }) {
           profit:items.reduce((a,r)=>a+Number(r["Profits"]||0),0),
           paid:items.reduce((a,r)=>a+Number(r["Total"]||0),0),note:"",
         }));
-        await chunk("sales",sales,20);
-        addLog(`✓ ${sales.length} sale records imported`,"ok");
+        await chunk("sales",saleDocs,20);
+        addLog(`✓ ${saleDocs.length} sale records imported`,"ok");
       }
-
       await refresh(); setStatus("Import complete! 🎉");
       addLog("All data is now live in Supabase.","ok");
     } catch(e) { addLog("Error: "+e.message,"err"); setStatus("Import failed — check log below"); }
@@ -1400,16 +1538,16 @@ function ImportData({ data, refresh }) {
 
   return (
     <div style={C.pg}>
-      <h1 style={C.h1}>Import Existing Data</h1>
+      <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Import Data</h1>
       <div style={C.card}>
-        <ST>Upload your Excel file</ST>
-        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12}}>
-          Upload <b style={{color:"#f59e0b"}}>Sales_Inventory_Template.xlsx</b> — it will import all 4 sheets:<br/>
-          <span style={{color:"#64748b",fontSize:12}}>Inventory → products · Dealers → customers · Salary → expenses · Sales → sales records</span>
+        <ST>Upload Excel File</ST>
+        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12,lineHeight:1.5}}>
+          Upload <b style={{color:"#f59e0b"}}>Sales_Inventory_Template.xlsx</b><br/>
+          <span style={{color:"#64748b",fontSize:12}}>Imports: Inventory · Dealers · Salary · Sales</span>
         </p>
-        <div style={C.alertW}><I n="warn" s={14}/> Uses merge — safe to run multiple times without duplicating</div>
-        <label style={{...C.btnP,cursor:"pointer",display:"inline-flex",gap:6,marginTop:12}}>
-          <I n="upload" s={14}/> {busy?"Importing…":"Choose Excel File"}
+        <div style={{...C.alertW,marginBottom:14}}><I n="warn" s={14}/> Safe to run multiple times</div>
+        <label style={{...C.btnP,cursor:"pointer",display:"inline-flex",gap:6,minHeight:48,padding:"12px 20px",fontSize:14}}>
+          <I n="upload" s={16}/> {busy?"Importing…":"Choose Excel File"}
           <input type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={go} disabled={busy}/>
         </label>
       </div>
@@ -1419,26 +1557,26 @@ function ImportData({ data, refresh }) {
           {status&&<div style={{color:"#f59e0b",fontWeight:600,marginBottom:10,fontSize:13}}>{status}</div>}
           {busy&&pct>0&&(
             <div style={{marginBottom:12}}>
-              <div style={{background:"#0f172a",borderRadius:6,height:6,overflow:"hidden"}}>
-                <div style={{background:"#f59e0b",height:"100%",width:`${pct}%`,transition:"width .3s"}}/>
+              <div style={{background:"#0f172a",borderRadius:6,height:8,overflow:"hidden"}}>
+                <div style={{background:"#f59e0b",height:"100%",width:`${pct}%`,transition:"width .3s",borderRadius:6}}/>
               </div>
-              <div style={{fontSize:11,color:"#64748b",marginTop:3}}>{pct}%</div>
+              <div style={{fontSize:11,color:"#64748b",marginTop:4}}>{pct}%</div>
             </div>
           )}
-          <div style={{maxHeight:220,overflow:"auto"}}>
+          <div style={{maxHeight:200,overflow:"auto"}}>
             {log.map((l,i)=>(
-              <div key={i} style={{fontSize:12,padding:"3px 0",color:l.t==="ok"?"#34d399":l.t==="err"?"#f87171":"#94a3b8"}}>{l.msg}</div>
+              <div key={i} style={{fontSize:12,padding:"4px 0",color:l.t==="ok"?"#34d399":l.t==="err"?"#f87171":"#94a3b8"}}>{l.msg}</div>
             ))}
           </div>
         </div>
       )}
       <div style={{...C.card,marginTop:12}}>
         <ST>Current DB Status</ST>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           {[["Products",data.products.length,"#f59e0b"],["Customers",data.customers.length,"#10b981"],["Sales",data.sales.length,"#818cf8"],["Expenses",data.expenses.length,"#64748b"]].map(([l,v,a])=>(
-            <div key={l} style={{background:"#0f172a",borderRadius:8,padding:"12px 16px",border:"1px solid #1e293b"}}>
+            <div key={l} style={{background:"#0f172a",borderRadius:10,padding:"12px 16px",border:"1px solid #1e293b"}}>
               <div style={{color:"#64748b",fontSize:11,marginBottom:4}}>{l}</div>
-              <div style={{fontSize:24,fontWeight:800,color:a}}>{v}</div>
+              <div style={{fontSize:22,fontWeight:800,color:a}}>{v}</div>
             </div>
           ))}
         </div>
@@ -1448,7 +1586,7 @@ function ImportData({ data, refresh }) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Styles  —  fixed dark-mode visibility
+   Styles
 ══════════════════════════════════════════════════════════════ */
 const C = {
   app:    {display:"flex",height:"100vh",background:"#060a10",fontFamily:"'DM Sans',system-ui,sans-serif",overflow:"hidden"},
@@ -1457,33 +1595,29 @@ const C = {
   bIcon:  {width:32,height:32,background:"linear-gradient(135deg,#f59e0b,#b45309)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:16,color:"#0d1117",flexShrink:0},
   bName:  {fontWeight:900,fontSize:13,color:"#f0f6ff",letterSpacing:1},
   bSub:   {fontSize:9,color:"#334155",letterSpacing:.5},
-  // nav: readable muted text — lighter than before
-  nav:    {display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"none",border:"none",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:500,textAlign:"left",width:"100%"},
+  nav:    {display:"flex",alignItems:"center",gap:8,padding:"9px 10px",background:"none",border:"none",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:500,textAlign:"left",width:"100%",minHeight:38},
   navA:   {background:"rgba(245,158,11,.12)",color:"#f59e0b"},
   sbFoot: {paddingTop:12,borderTop:"1px solid #1a2235"},
-  main:   {flex:1,overflow:"auto",padding:"22px 28px"},
+  main:   {flex:1,overflow:"hidden",display:"flex",flexDirection:"column"},
   pg:     {maxWidth:960,margin:"0 auto"},
-  h1:     {fontSize:20,fontWeight:800,color:"#f0f6ff",marginBottom:18,letterSpacing:-.5},
-  phdr:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18},
+  h1:     {fontSize:20,fontWeight:800,color:"#f0f6ff",marginBottom:16,letterSpacing:-.5},
+  phdr:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16},
   g4:     {display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18},
   g3:     {display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10},
   two:    {display:"grid",gridTemplateColumns:"1fr 1fr",gap:14},
-  card:   {background:"#08101e",border:"1px solid #1a2235",borderRadius:10,padding:"16px 18px",marginBottom:0},
-  row:    {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #0d1521"},
-  alertW: {display:"flex",gap:8,alignItems:"center",background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.25)",borderRadius:8,padding:"9px 12px",color:"#fbbf24",fontSize:13,marginBottom:12},
-  tbl:    {background:"#08101e",border:"1px solid #1a2235",borderRadius:10,overflow:"hidden"},
-  // tr text: #cbd5e1 is clearly visible against dark bg
-  tr:     {display:"grid",gap:8,padding:"10px 14px",borderBottom:"1px solid #0d1521",fontSize:13,alignItems:"center",color:"#cbd5e1"},
-  // th: was #334155 (too dark) → now #4a5c74
+  card:   {background:"#08101e",border:"1px solid #1a2235",borderRadius:12,padding:"16px 18px",marginBottom:0},
+  row:    {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #0d1521"},
+  alertW: {display:"flex",gap:8,alignItems:"flex-start",background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.25)",borderRadius:8,padding:"10px 12px",color:"#fbbf24",fontSize:13},
+  tbl:    {background:"#08101e",border:"1px solid #1a2235",borderRadius:12,overflow:"hidden"},
+  tr:     {display:"grid",gap:8,padding:"11px 14px",borderBottom:"1px solid #0d1521",fontSize:13,alignItems:"center",color:"#cbd5e1"},
   th:     {color:"#4a5c74",fontSize:10,textTransform:"uppercase",letterSpacing:1,fontWeight:700,background:"#050c17"},
-  // lbl: was #334155 → now #64748b
-  lbl:    {display:"block",fontSize:10,color:"#64748b",marginBottom:4,textTransform:"uppercase",letterSpacing:.5},
-  inp:    {width:"100%",background:"#0d1521",border:"1px solid #1a2235",borderRadius:6,padding:"8px 10px",color:"#f0f6ff",fontSize:13,outline:"none",boxSizing:"border-box"},
-  srch:   {width:"100%",background:"#08101e",border:"1px solid #1a2235",borderRadius:8,padding:"9px 13px",color:"#f0f6ff",fontSize:13,outline:"none",marginBottom:13,boxSizing:"border-box"},
-  btnP:   {display:"flex",alignItems:"center",gap:6,background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:7,padding:"8px 16px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
-  btnG:   {display:"flex",alignItems:"center",gap:6,background:"transparent",color:"#94a3b8",border:"1px solid #1e293b",borderRadius:7,padding:"8px 14px",fontWeight:500,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
-  iBtn:   {background:"transparent",border:"1px solid #1a2235",borderRadius:5,padding:"5px 7px",color:"#64748b",cursor:"pointer",display:"flex",alignItems:"center"},
+  lbl:    {display:"block",fontSize:11,color:"#64748b",marginBottom:5,textTransform:"uppercase",letterSpacing:.5},
+  inp:    {width:"100%",background:"#0d1521",border:"1px solid #1a2235",borderRadius:8,padding:"10px 12px",color:"#f0f6ff",fontSize:14,outline:"none",boxSizing:"border-box"},
+  srch:   {width:"100%",background:"#08101e",border:"1px solid #1a2235",borderRadius:10,padding:"11px 14px",color:"#f0f6ff",fontSize:14,outline:"none",marginBottom:14,boxSizing:"border-box"},
+  btnP:   {display:"flex",alignItems:"center",gap:6,background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:9,padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
+  btnG:   {display:"flex",alignItems:"center",gap:6,background:"transparent",color:"#94a3b8",border:"1px solid #1e293b",borderRadius:9,padding:"9px 14px",fontWeight:500,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
+  iBtn:   {background:"transparent",border:"1px solid #1a2235",borderRadius:7,padding:"6px 8px",color:"#64748b",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
   splash: {display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#060a10"},
-  logo:   {fontSize:52,fontWeight:900,letterSpacing:8,color:"#f59e0b",marginBottom:6},
-  spinner:{width:26,height:26,border:"3px solid #1a2235",borderTop:"3px solid #f59e0b",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"18px auto"},
+  logo:   {fontSize:48,fontWeight:900,letterSpacing:8,color:"#f59e0b",marginBottom:6},
+  spinner:{width:28,height:28,border:"3px solid #1a2235",borderTop:"3px solid #f59e0b",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"18px auto"},
 };
