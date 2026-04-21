@@ -44,24 +44,64 @@ const toISO   = d  => { if (!d) return today(); if (d instanceof Date) return d.
 /* ══════════════════════════════════════════════════════════════
    Auth helpers
 ══════════════════════════════════════════════════════════════ */
+
+// SHA-256 hash via Web Crypto API
+async function hashPassword(pw) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pw));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+const IS_HASH = s => typeof s==="string" && /^[0-9a-f]{64}$/.test(s);
+const SESSION_TTL = 8 * 60 * 60 * 1000; // 8-hour session
+
 async function getDBCreds() {
   try {
     const rows = await sb.getAll("settings", "&id=eq.credentials");
     if (rows && rows.length > 0) return rows[0];
-    const def = { id:"credentials", username:"admin", password:"admin123" };
+    // First-run: store hashed default password
+    const hashed = await hashPassword("admin123");
+    const def = { id:"credentials", username:"admin", password:hashed };
     await sb.upsert("settings", def);
     return def;
   } catch {
-    return { id:"credentials", username:"admin", password:"admin123" };
+    return { id:"credentials", username:"admin", password:null };
   }
 }
 async function saveDBCreds(c) {
-  await sb.upsert("settings", { id:"credentials", username:c.username, password:c.password });
+  const hashed = await hashPassword(c.password);
+  await sb.upsert("settings", { id:"credentials", username:c.username, password:hashed });
 }
-function isLoggedIn() { return !!localStorage.getItem("stow_session"); }
-function setSession(u) { localStorage.setItem("stow_session", u); }
+async function getShopGST() {
+  try {
+    const rows = await sb.getAll("settings", "&id=eq.shop_info");
+    return rows?.[0]?.gst_no || "";
+  } catch { return ""; }
+}
+async function saveShopGST(gst_no) {
+  await sb.upsert("settings", { id:"shop_info", gst_no });
+}
+
+// Session token: JSON {user, exp} base64-encoded
+function isLoggedIn() {
+  try {
+    const raw = localStorage.getItem("stow_session");
+    if (!raw) return false;
+    const { exp } = JSON.parse(atob(raw));
+    return Date.now() < exp;
+  } catch { return false; }
+}
+function setSession(u) {
+  const token = btoa(JSON.stringify({ user:u, exp:Date.now()+SESSION_TTL, nonce:crypto.randomUUID() }));
+  localStorage.setItem("stow_session", token);
+}
 function clearSession() { localStorage.removeItem("stow_session"); }
-function getSession() { return localStorage.getItem("stow_session")||""; }
+function getSession() {
+  try {
+    const raw = localStorage.getItem("stow_session");
+    if (!raw) return "";
+    const { user, exp } = JSON.parse(atob(raw));
+    return Date.now() < exp ? user : "";
+  } catch { return ""; }
+}
 
 /* ══════════════════════════════════════════════════════════════
    Icons
@@ -90,6 +130,7 @@ const I = ({ n, s=16 }) => {
     money:  <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
     menu:   <><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></>,
     user:   <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+    supp:   <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2"/><path d="M12 12v4"/><path d="M10 14h4"/></>,
   };
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -296,8 +337,18 @@ function LoginScreen({ onLogin }) {
     setBusy(true); setErr("");
     try {
       const creds = await getDBCreds();
-      if (user.trim()===creds.username && pass===creds.password) {
-        clearLockout();                       // reset on success
+      let match = false;
+      if (IS_HASH(creds.password)) {
+        // Normal: compare hashes
+        const hashed = await hashPassword(pass);
+        match = user.trim()===creds.username && hashed===creds.password;
+      } else {
+        // Migration: stored as plain text — compare plain, then re-save as hash
+        match = user.trim()===creds.username && pass===creds.password;
+        if (match) await saveDBCreds({ username:creds.username, password:pass });
+      }
+      if (match) {
+        clearLockout();
         setSession(user.trim()); onLogin(user.trim());
       } else {
         const attempts = incAttempts();
@@ -404,10 +455,18 @@ function ChangePwModal({ onClose }) {
   const save = async () => {
     if (!f.n1) return setErr("New password cannot be empty.");
     if (f.n1 !== f.n2) return setErr("New passwords do not match.");
-    if (f.n1.length < 4) return setErr("Password must be at least 4 characters.");
+    if (f.n1.length < 8) return setErr("Password must be at least 8 characters.");
     try {
       const creds = await getDBCreds();
-      if (f.old !== creds.password) return setErr("Current password is incorrect.");
+      // Verify current password (supports both plain migration and hashed)
+      let currentMatch = false;
+      if (IS_HASH(creds.password)) {
+        const oldHash = await hashPassword(f.old);
+        currentMatch = oldHash === creds.password;
+      } else {
+        currentMatch = f.old === creds.password;
+      }
+      if (!currentMatch) return setErr("Current password is incorrect.");
       await saveDBCreds({...creds, password:f.n1});
       setOk(true); setErr("");
     } catch(e) {
@@ -454,23 +513,35 @@ function ChangePwModal({ onClose }) {
 export default function App() {
   const [authed, setAuthed] = useState(isLoggedIn());
   const [uname,  setUname]  = useState(getSession());
-  const [data,   setData]   = useState({ products:[], customers:[], sales:[], debtPayments:[], expenses:[] });
+  const [data,   setData]   = useState({ products:[], customers:[], suppliers:[], sales:[], debtPayments:[], expenses:[] });
+  const [shopGST,setShopGST]= useState("");
   const [tab,    setTab]    = useState("dashboard");
   const [ready,  setReady]  = useState(false);
   const [err,    setErr]    = useState("");
   const [showPw, setShowPw] = useState(false);
   const isMobile = useIsMobile();
 
+  // Auto-logout when session expires
+  useEffect(()=>{
+    const id = setInterval(()=>{
+      if (authed && !isLoggedIn()) { clearSession(); setAuthed(false); setReady(false); }
+    }, 60_000);
+    return ()=>clearInterval(id);
+  }, [authed]);
+
   const refresh = useCallback(async () => {
     try {
-      const [products,customers,sales,debtPayments,expenses] = await Promise.all([
+      const [products,customers,suppliers,sales,debtPayments,expenses,gst] = await Promise.all([
         sb.getAll("products"),
         sb.getAll("customers"),
+        sb.getAll("suppliers").catch(()=>[]),
         sb.getAll("sales","&order=created_at.desc"),
         sb.getAll("debt_payments","&order=created_at.desc"),
         sb.getAll("expenses","&order=created_at.desc"),
+        getShopGST(),
       ]);
-      setData({ products,customers,sales,debtPayments,expenses });
+      setData({ products,customers,suppliers,sales,debtPayments,expenses });
+      setShopGST(gst);
     } catch(e) { setErr(e.message); }
   }, []);
 
@@ -499,6 +570,7 @@ export default function App() {
     {id:"inventory", label:"Inventory", n:"inv"},
     {id:"sales",     label:"New Sale",  n:"sale"},
     {id:"customers", label:"Customers", n:"cust"},
+    {id:"suppliers", label:"Suppliers", n:"supp"},
     {id:"debts",     label:"Debts",     n:"debt"},
     {id:"expenses",  label:"Expenses",  n:"exp"},
     {id:"reports",   label:"Reports",   n:"rpt"},
@@ -508,6 +580,7 @@ export default function App() {
   /* ── Global CSS including mobile overrides ── */
   const globalCSS = `
     @keyframes spin{to{transform:rotate(360deg)}}
+    html,body{margin:0;padding:0;width:100%;height:100%;}
     body{margin:0}
     *{box-sizing:border-box}
     input:focus,select:focus{border-color:#f59e0b!important;outline:none}
@@ -570,11 +643,12 @@ export default function App() {
         <div style={{flex:1,overflow:"auto",padding:isMobile?"14px 12px 80px":"22px 28px"}}>
           {tab==="dashboard" && <Dashboard  data={data} isMobile={isMobile}/>}
           {tab==="inventory" && <Inventory  data={data} refresh={refresh} isMobile={isMobile}/>}
-          {tab==="sales"     && <Sales      data={data} refresh={refresh} setTab={setTab} isMobile={isMobile}/>}
+          {tab==="sales"     && <Sales      data={data} refresh={refresh} setTab={setTab} shopGST={shopGST} isMobile={isMobile}/>}
           {tab==="customers" && <Customers  data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="suppliers" && <Suppliers  data={data} refresh={refresh} shopGST={shopGST} saveShopGST={async g=>{await saveShopGST(g);setShopGST(g);}} isMobile={isMobile}/>}
           {tab==="debts"     && <Debts      data={data} refresh={refresh} isMobile={isMobile}/>}
           {tab==="expenses"  && <Expenses   data={data} refresh={refresh} isMobile={isMobile}/>}
-          {tab==="reports"   && <Reports    data={data} refresh={refresh} isMobile={isMobile}/>}
+          {tab==="reports"   && <Reports    data={data} refresh={refresh} shopGST={shopGST} isMobile={isMobile}/>}
           {tab==="import"    && <ImportData data={data} refresh={refresh} isMobile={isMobile}/>}
         </div>
       </main>
@@ -801,7 +875,7 @@ function Inventory({ data, refresh, isMobile }) {
 /* ══════════════════════════════════════════════════════════════
    New Sale — mobile-optimised item entry
 ══════════════════════════════════════════════════════════════ */
-function Sales({ data, refresh, setTab, isMobile }) {
+function Sales({ data, refresh, setTab, shopGST, isMobile }) {
   const [custId, setCustId] = useState("");
   const [walkIn, setWalkIn] = useState("");
   const [items,  setItems]  = useState([{productId:"",pname:"",qty:1,price:0}]);
@@ -854,7 +928,7 @@ function Sales({ data, refresh, setTab, isMobile }) {
       }
       await refresh();
       const cust=data.customers.find(c=>c.id===custId);
-      setRcpt({...sale,customerName:cust?.name||walkIn||"Walk-in"});
+      setRcpt({...sale,customerName:cust?.name||walkIn||"Walk-in",customerGST:cust?.gst_no||""});
       setItems([{productId:"",pname:"",qty:1,price:0}]); setCustId(""); setWalkIn(""); setPaid(""); setNote("");
     } catch(e){ toast(e.message,"err"); }
     finally { setBusy(false); }
@@ -878,11 +952,13 @@ function Sales({ data, refresh, setTab, isMobile }) {
             <div style={{textAlign:"center",marginBottom:12}}>
               <div style={{fontSize:20,fontWeight:900,letterSpacing:5}}>Stove Works</div>
               <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
+              {shopGST&&<div style={{fontSize:10,color:"#333",marginTop:2}}>GSTIN: {shopGST}</div>}
               <div style={{borderTop:"1px dashed #ccc",marginTop:6,paddingTop:6,fontSize:10,color:"#777"}}>
                 Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
               </div>
             </div>
-            <div style={{fontWeight:700,marginBottom:8,fontSize:13}}>{rcpt.customerName}</div>
+            <div style={{fontWeight:700,marginBottom:2,fontSize:13}}>{rcpt.customerName}</div>
+            {rcpt.customerGST&&<div style={{fontSize:10,color:"#555",marginBottom:8}}>GSTIN: {rcpt.customerGST}</div>}
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead><tr style={{borderBottom:"1px dashed #ccc"}}>
                 <th style={{textAlign:"left",padding:"3px 0"}}>Item</th>
@@ -994,7 +1070,7 @@ function Sales({ data, refresh, setTab, isMobile }) {
 /* ══════════════════════════════════════════════════════════════
    Receipt
 ══════════════════════════════════════════════════════════════ */
-function Receipt({ rcpt, products, onClose }) {
+function Receipt({ rcpt, products, shopGST, onClose }) {
   const doPrint = () => {
     const content = document.getElementById("stow-receipt-body");
     if (!content) return window.print();
@@ -1013,11 +1089,13 @@ function Receipt({ rcpt, products, onClose }) {
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:22,fontWeight:900,letterSpacing:5,marginBottom:2}}>STOW</div>
           <div style={{fontSize:10,color:"#555"}}>Wholesale & Retail</div>
+          {(shopGST||rcpt.shopGST)&&<div style={{fontSize:10,color:"#333",marginTop:2}}>GSTIN: {shopGST||rcpt.shopGST}</div>}
           <div style={{borderTop:"1px dashed #ccc",marginTop:8,paddingTop:8,fontSize:10,color:"#777"}}>
             Bill #{rcpt.id.slice(-8).toUpperCase()} · {fmtDate(rcpt.date)}
           </div>
         </div>
-        <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>{rcpt.customerName}</div>
+        <div style={{fontWeight:700,marginBottom:2,fontSize:13}}>{rcpt.customerName}</div>
+        {rcpt.customerGST&&<div style={{fontSize:10,color:"#555",marginBottom:10}}>GSTIN: {rcpt.customerGST}</div>}
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead><tr style={{borderBottom:"1px dashed #ccc"}}>
             <th style={{textAlign:"left",padding:"3px 0",fontWeight:600}}>Item</th>
@@ -1083,7 +1161,7 @@ function Customers({ data, refresh, isMobile }) {
     if (!editC) return;
     setBusy(true);
     try {
-      await sb.upsert("customers",{...editC,name:form.name,phone:form.phone,address:form.address});
+      await sb.upsert("customers",{...editC,name:form.name,phone:form.phone,address:form.address||""});
       await refresh(); setEditC(null); setForm(blank); toast("Customer updated ✓");
     } finally { setBusy(false); }
   };
@@ -1133,6 +1211,7 @@ function Customers({ data, refresh, isMobile }) {
             <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
             <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
             <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
+            {/* <Fld label="GST No"  value={form.gst_no}  onChange={v=>setForm(f=>({...f,gst_no:v.toUpperCase()}))} ph="e.g. 33ABCDE1234F1Z5"/> */}
           </div>
           <div style={{display:"flex",gap:8,marginTop:12}}>
             <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
@@ -1148,6 +1227,7 @@ function Customers({ data, refresh, isMobile }) {
             <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
             <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
             <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
+            {/* <Fld label="GST No"  value={form.gst_no}  onChange={v=>setForm(f=>({...f,gst_no:v.toUpperCase()}))} ph="e.g. 33ABCDE1234F1Z5"/> */}
           </div>
           <div style={{display:"flex",gap:8,marginTop:12}}>
             <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={saveEdit} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Update"}</button>
@@ -1202,6 +1282,7 @@ function Customers({ data, refresh, isMobile }) {
                   <div style={{fontWeight:700,fontSize:15,color:"#f0f6ff"}}>{c.name}</div>
                   <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{c.phone||"No phone"}</div>
                   {c.address&&<div style={{color:"#475569",fontSize:11,marginTop:1}}>{c.address}</div>}
+                  {c.gst_no&&<div style={{color:"#fbbf24",fontSize:11,marginTop:1}}>GST: {c.gst_no}</div>}
                 </div>
                 <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
                   <div style={{fontWeight:800,fontSize:18,color:c.debt>0?"#f87171":"#34d399"}}>{c.debt>0?fmt(c.debt):"Clear ✓"}</div>
@@ -1242,48 +1323,262 @@ function Customers({ data, refresh, isMobile }) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Debts — already card-based, minor mobile improvements
+   Suppliers — info + GST management (debt flows from Expenses)
+══════════════════════════════════════════════════════════════ */
+function Suppliers({ data, refresh, shopGST, saveShopGST, isMobile }) {
+  const blank = {name:"",phone:"",address:"",gst_no:""};
+  const [form,    setForm]    = useState(blank);
+  const [show,    setShow]    = useState(false);
+  const [busy,    setBusy]    = useState(false);
+  const [editS,   setEditS]   = useState(null);
+  const [srch,    setSrch]    = useState("");
+  const [editGST, setEditGST] = useState(false);
+  const [gstDraft,setGstDraft]= useState(shopGST||"");
+  const [t, toast] = useToast();
+
+  const suppliers = data.suppliers || [];
+
+  const add = async () => {
+    if (!form.name) return toast("Enter supplier name","err");
+    setBusy(true);
+    try {
+      await sb.upsert("suppliers",{...form,id:uid(),debt:0,created_at:Date.now()});
+      await refresh(); setForm(blank); setShow(false); toast("Supplier added ✓");
+    } finally { setBusy(false); }
+  };
+
+  const saveEdit = async () => {
+    if (!editS) return;
+    setBusy(true);
+    try {
+      await sb.upsert("suppliers",{...editS,name:form.name,phone:form.phone,address:form.address,gst_no:form.gst_no||""});
+      await refresh(); setEditS(null); setForm(blank); toast("Supplier updated ✓");
+    } finally { setBusy(false); }
+  };
+
+  const del = async id => {
+    const s=suppliers.find(x=>x.id===id);
+    if (s?.debt>0&&!confirm(`You owe this supplier ${fmt(s.debt)}. Delete anyway?`)) return;
+    await sb.del("suppliers",id); await refresh(); toast("Supplier deleted");
+  };
+
+  const openEdit = s => { setEditS(s); setForm({name:s.name,phone:s.phone||"",address:s.address||"",gst_no:s.gst_no||""}); setShow(false); };
+
+  const filtered = suppliers.filter(s=>
+    s.name?.toLowerCase().includes(srch.toLowerCase())||(s.phone||"").includes(srch)||(s.gst_no||"").toLowerCase().includes(srch.toLowerCase())
+  );
+  const totalDebt = suppliers.reduce((a,s)=>a+(s.debt||0),0);
+  const formCols  = isMobile ? {display:"flex",flexDirection:"column",gap:12} : C.g3;
+
+  return (
+    <div style={C.pg}>
+      <Toast t={t}/>
+      <div style={C.phdr}>
+        <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Suppliers <span style={{fontSize:13,color:"#64748b",fontWeight:400}}>({suppliers.length})</span></h1>
+        <button style={{...C.btnP,minHeight:44}} onClick={()=>{setShow(s=>!s);setEditS(null);setForm(blank);}}><I n="plus" s={14}/> Add</button>
+      </div>
+
+      {/* ── Shop GST ── */}
+      <div style={{...C.card,marginBottom:14,borderTop:"3px solid #818cf8"}}>
+        <ST>Your Shop GST Number (printed on all bills)</ST>
+        {editGST ? (
+          <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div style={{flex:1}}>
+              <input style={{...C.inp,fontFamily:"monospace",letterSpacing:1}} value={gstDraft}
+                onChange={e=>setGstDraft(e.target.value.toUpperCase())} placeholder="e.g. 33ABCDE1234F1Z5" maxLength={15}/>
+            </div>
+            <button style={{...C.btnP,minHeight:44,padding:"0 18px"}} onClick={async()=>{await saveShopGST(gstDraft.trim());setEditGST(false);toast("Shop GST saved ✓");}}>
+              <I n="check" s={14}/> Save
+            </button>
+            <button style={{...C.btnG,minHeight:44,padding:"0 14px"}} onClick={()=>{setEditGST(false);setGstDraft(shopGST||"");}}>
+              <I n="close" s={14}/>
+            </button>
+          </div>
+        ) : (
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <span style={{fontFamily:"monospace",fontSize:15,color:shopGST?"#fbbf24":"#475569",letterSpacing:1}}>
+              {shopGST||"Not set — click Edit to add"}
+            </span>
+            <button style={{...C.btnG,padding:"8px 14px",fontSize:12}} onClick={()=>{setEditGST(true);setGstDraft(shopGST||"");}}>
+              <I n="edit" s={13}/> Edit
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Total owed ── */}
+      {totalDebt>0&&(
+        <div style={{...C.card,marginBottom:14,padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"3px solid #f87171"}}>
+          <span style={{color:"#94a3b8",fontSize:13}}>Total Owed to Suppliers</span>
+          <span style={{fontWeight:800,fontSize:22,color:"#f87171"}}>{fmt(totalDebt)}</span>
+        </div>
+      )}
+
+      {/* ── Add form ── */}
+      {show&&!editS&&(
+        <div style={{...C.card,marginBottom:14}}>
+          <ST>New Supplier</ST>
+          <div style={formCols}>
+            <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
+            <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
+            <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
+            <Fld label="GST No"  value={form.gst_no}  onChange={v=>setForm(f=>({...f,gst_no:v.toUpperCase()}))} ph="Supplier GSTIN"/>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setShow(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit form ── */}
+      {editS&&(
+        <div style={{...C.card,marginBottom:14,borderTop:"3px solid #f59e0b"}}>
+          <ST>Edit: {editS.name}</ST>
+          <div style={formCols}>
+            <Fld label="Name *"  value={form.name}    onChange={v=>setForm(f=>({...f,name:v}))}/>
+            <Fld label="Phone"   value={form.phone}   onChange={v=>setForm(f=>({...f,phone:v}))}/>
+            <Fld label="Address" value={form.address} onChange={v=>setForm(f=>({...f,address:v}))}/>
+            <Fld label="GST No"  value={form.gst_no}  onChange={v=>setForm(f=>({...f,gst_no:v.toUpperCase()}))} ph="Supplier GSTIN"/>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={saveEdit} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Update"}</button>
+            <button style={{...C.btnG,flex:1,justifyContent:"center",minHeight:46}} onClick={()=>setEditS(null)}><I n="close" s={14}/> Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{...C.alertW,marginBottom:14,fontSize:12}}>
+        <I n="warn" s={13}/> Supplier debt is managed automatically — increases when you record a Purchase expense, and can be paid off from the <b>Debts</b> tab.
+      </div>
+
+      <input style={C.srch} placeholder="Search by name, phone or GST…" value={srch} onChange={e=>setSrch(e.target.value)}/>
+
+      {/* ── Mobile cards ── */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filtered.length===0?<MT text="No suppliers yet"/>:filtered.map(s=>(
+            <div key={s.id} style={{...C.card,padding:"14px 14px",borderLeft:`3px solid ${s.debt>0?"#f87171":"#10b981"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:15,color:"#f0f6ff"}}>{s.name}</div>
+                  <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{s.phone||"No phone"}</div>
+                  {s.address&&<div style={{color:"#475569",fontSize:11,marginTop:1}}>{s.address}</div>}
+                  {s.gst_no&&<div style={{color:"#fbbf24",fontSize:11,marginTop:1,fontFamily:"monospace"}}>GST: {s.gst_no}</div>}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
+                  <div style={{fontWeight:800,fontSize:18,color:s.debt>0?"#f87171":"#34d399"}}>{s.debt>0?fmt(s.debt):"Clear ✓"}</div>
+                  {s.debt>0&&<div style={{fontSize:10,color:"#64748b",marginTop:1}}>we owe them</div>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button style={{...C.iBtn,flex:1,justifyContent:"center",padding:"9px 0",color:"#94a3b8",fontSize:12,gap:5}} onClick={()=>openEdit(s)}><I n="edit" s={14}/> Edit Info</button>
+                <button style={{...C.iBtn,padding:"9px 12px",color:"#f87171"}} onClick={()=>del(s.id)}><I n="trash" s={15}/></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        /* ── Desktop table — same 5-col style as original ── */
+        <div style={C.tbl}>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"2fr 1fr 2fr 120px 80px"}}>
+            <span>Name</span><span>Phone</span><span>GST No</span><span>We Owe</span><span>Actions</span>
+          </div>
+          {filtered.length===0?<MT text="No suppliers yet"/>:filtered.map(s=>(
+            <div key={s.id} style={{...C.tr,gridTemplateColumns:"2fr 1fr 2fr 120px 80px"}}>
+              <div>
+                <div style={{fontWeight:600,color:"#f0f6ff",fontSize:13}}>{s.name}</div>
+                {s.phone&&<div style={{color:"#475569",fontSize:11,marginTop:2}}>{s.phone}</div>}
+              </div>
+              <span style={{color:"#94a3b8",fontSize:12}}>{s.phone||"—"}</span>
+              <span style={{color:"#fbbf24",fontSize:12,fontFamily:"monospace"}}>{s.gst_no||"—"}</span>
+              <span><span style={{fontWeight:700,color:s.debt>0?"#f87171":"#34d399",fontSize:13}}>{s.debt>0?fmt(s.debt):"Clear ✓"}</span></span>
+              <span style={{display:"flex",gap:5}}>
+                <button style={{...C.iBtn,color:"#94a3b8"}} onClick={()=>openEdit(s)}><I n="edit" s={13}/></button>
+                <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(s.id)}><I n="trash" s={13}/></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+/* ══════════════════════════════════════════════════════════════
+   Debts — Receivables (dealers owe you) + Payables (you owe suppliers)
 ══════════════════════════════════════════════════════════════ */
 function Debts({ data, refresh, isMobile }) {
-  const [amt, setAmt] = useState({});
+  const [custAmt, setCustAmt] = useState({});
+  const [suppAmt, setSuppAmt] = useState({});
   const [t, toast] = useToast();
-  const debtors   = data.customers.filter(c=>c.debt>0).sort((a,b)=>b.debt-a.debt);
-  const totalDebt = debtors.reduce((a,c)=>a+c.debt,0);
 
-  const collect = async (id) => {
-    const a=parseFloat(amt[id]); if(!a||a<=0) return toast("Enter valid amount","err");
+  const suppliers  = data.suppliers || [];
+  const debtors    = data.customers.filter(c=>c.debt>0).sort((a,b)=>b.debt-a.debt);
+  const payables   = suppliers.filter(s=>s.debt>0).sort((a,b)=>b.debt-a.debt);
+  const totalRecv  = debtors.reduce((a,c)=>a+c.debt,0);
+  const totalPay   = payables.reduce((a,s)=>a+(s.debt||0),0);
+
+  // Collect from a customer (they pay you)
+  const collect = async id => {
+    const a=parseFloat(custAmt[id]); if(!a||a<=0) return toast("Enter valid amount","err");
     const c=data.customers.find(x=>x.id===id);
     if (a>c.debt) return toast(`Max collectible: ${fmt(c.debt)}`,"warn");
     await sb.upsert("customers",{...c,debt:Math.max(0,(c.debt||0)-a)});
     await sb.upsert("debt_payments",{id:uid(),customer_id:id,amount:a,date:today(),created_at:Date.now()});
-    await refresh(); setAmt(p=>({...p,[id]:""})); toast(`${fmt(a)} collected ✓`);
+    await refresh(); setCustAmt(p=>({...p,[id]:""})); toast(`${fmt(a)} collected ✓`);
   };
+
+  // Pay a supplier (you pay them)
+  const pay = async id => {
+    const a=parseFloat(suppAmt[id]); if(!a||a<=0) return toast("Enter valid amount","err");
+    try {
+      const rows = await sb.getAll("suppliers", `&id=eq.${encodeURIComponent(id)}`);
+      const s = rows?.[0];
+      if (!s) return toast("Supplier not found","err");
+      if (a > s.debt) return toast(`Max payable: ${fmt(s.debt)}`,"warn");
+      await sb.upsert("suppliers", {...s, debt: Math.max(0, (s.debt||0) - a)});
+      await refresh(); setSuppAmt(p=>({...p,[id]:""})); toast(`${fmt(a)} paid to ${s.name} ✓`);
+    } catch(e) { toast("Payment failed: " + e.message, "err"); }
+  };
+
+  // Purchase history for a supplier from expenses
+  const suppPurchases = id => data.expenses
+    .filter(e=>e.description==="purchase"&&e.supplier_id===id)
+    .slice(0,5);
 
   return (
     <div style={C.pg}>
       <Toast t={t}/>
       <h1 style={{...C.h1,fontSize:isMobile?18:20}}>Debt Management</h1>
-      {totalDebt>0&&(
-        <div style={{...C.card,marginBottom:14,padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"3px solid #ef4444"}}>
-          <span style={{color:"#94a3b8",fontSize:13}}>Total Outstanding</span>
-          <span style={{fontWeight:800,fontSize:24,color:"#f87171"}}>{fmt(totalDebt)}</span>
-        </div>
-      )}
+
+      {/* ── Summary ── */}
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(3,1fr)",gap:10,marginBottom:16}}>
+        <StatC label="Receivables"  val={fmt(totalRecv)} sub={`${debtors.length} dealer(s) owe you`}   acc="#f87171"/>
+        <StatC label="Payables"     val={fmt(totalPay)}  sub={`${payables.length} supplier(s) to pay`} acc="#f59e0b"/>
+        <StatC label="Net Position" val={fmt(totalRecv-totalPay)} sub={totalRecv>=totalPay?"You're ahead":"You owe more"} acc={totalRecv>=totalPay?"#10b981":"#818cf8"}/>
+      </div>
+
+      {/* ══ SECTION 1: RECEIVABLES ══ */}
+      <div style={{...C.h1,fontSize:14,color:"#f87171",marginBottom:10,letterSpacing:.5}}>
+        ↓ Receivables — Dealers Owe You
+      </div>
       {debtors.length===0
-        ? <div style={{...C.card,textAlign:"center",padding:48}}><div style={{fontSize:40,marginBottom:8}}>✅</div><div style={{color:"#64748b",fontSize:14}}>No outstanding debts!</div></div>
+        ? <div style={{...C.card,textAlign:"center",padding:32,marginBottom:16}}><div style={{fontSize:28,marginBottom:6}}>✅</div><div style={{color:"#64748b",fontSize:13}}>No outstanding dealer debts!</div></div>
         : debtors.map(c=>(
           <div key={c.id} style={{...C.card,marginBottom:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <div>
                 <div style={{fontWeight:700,fontSize:16,color:"#f0f6ff"}}>{c.name}</div>
-                <div style={{color:"#64748b",fontSize:12,marginTop:2}}>{c.phone||"No phone"}</div>
+                <div style={{color:"#64748b",fontSize:12,marginTop:2}}>
+                  {c.phone||"No phone"}{c.gst_no&&<span style={{color:"#fbbf24",marginLeft:8,fontFamily:"monospace",fontSize:11}}>GST: {c.gst_no}</span>}
+                </div>
               </div>
               <div style={{fontWeight:800,fontSize:isMobile?22:26,color:"#f87171"}}>{fmt(c.debt)}</div>
             </div>
             <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:isMobile?"wrap":"nowrap"}}>
               <input style={{...C.inp,flex:1,minWidth:0}} type="number" placeholder="Collection amount ₹"
-                value={amt[c.id]||""} onChange={e=>setAmt(p=>({...p,[c.id]:e.target.value}))}/>
-              <button style={{...C.btnG,padding:"10px 14px",fontSize:13,minHeight:44,flexShrink:0}} onClick={()=>setAmt(p=>({...p,[c.id]:String(c.debt)}))}>Full</button>
+                value={custAmt[c.id]||""} onChange={e=>setCustAmt(p=>({...p,[c.id]:e.target.value}))}/>
+              <button style={{...C.btnG,padding:"10px 14px",fontSize:13,minHeight:44,flexShrink:0}} onClick={()=>setCustAmt(p=>({...p,[c.id]:String(c.debt)}))}>Full</button>
               <button style={{...C.btnP,minHeight:44,flexShrink:0}} onClick={()=>collect(c.id)}><I n="check" s={14}/> Collect</button>
             </div>
             <div>
@@ -1298,28 +1593,98 @@ function Debts({ data, refresh, isMobile }) {
           </div>
         ))
       }
+
+      {/* ══ SECTION 2: PAYABLES ══ */}
+      <div style={{...C.h1,fontSize:14,color:"#f59e0b",marginBottom:10,marginTop:8,letterSpacing:.5}}>
+        ↑ Payables — You Owe Suppliers
+      </div>
+      {payables.length===0
+        ? <div style={{...C.card,textAlign:"center",padding:32}}><div style={{fontSize:28,marginBottom:6}}>✅</div><div style={{color:"#64748b",fontSize:13}}>No outstanding supplier payments!</div></div>
+        : payables.map(s=>(
+          <div key={s.id} style={{...C.card,marginBottom:12,borderTop:"3px solid rgba(245,158,11,.4)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:16,color:"#f0f6ff"}}>{s.name}</div>
+                <div style={{color:"#64748b",fontSize:12,marginTop:2}}>
+                  {s.phone||"No phone"}{s.gst_no&&<span style={{color:"#fbbf24",marginLeft:8,fontFamily:"monospace",fontSize:11}}>GST: {s.gst_no}</span>}
+                </div>
+              </div>
+              <div style={{fontWeight:800,fontSize:isMobile?22:26,color:"#f59e0b"}}>{fmt(s.debt)}</div>
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:isMobile?"wrap":"nowrap"}}>
+              <input style={{...C.inp,flex:1,minWidth:0}} type="number" placeholder="Payment amount ₹"
+                value={suppAmt[s.id]||""} onChange={e=>setSuppAmt(p=>({...p,[s.id]:e.target.value}))}/>
+              <button style={{...C.btnG,padding:"10px 14px",fontSize:13,minHeight:44,flexShrink:0}} onClick={()=>setSuppAmt(p=>({...p,[s.id]:String(s.debt)}))}>Full</button>
+              <button style={{...C.btnP,minHeight:44,flexShrink:0}} onClick={()=>pay(s.id)}><I n="check" s={14}/> Pay</button>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Purchase history (from expenses):</div>
+              {suppPurchases(s.id).length===0
+                ? <div style={{fontSize:11,color:"#334155"}}>No purchases recorded yet</div>
+                : suppPurchases(s.id).map(e=>(
+                  <div key={e.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748b",padding:"3px 0"}}>
+                    <span>{fmtDate(e.date)}</span>
+                    <span style={{color:"#f87171",fontWeight:600}}>−{fmt(e.amount)} purchased</span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        ))
+      }
     </div>
   );
 }
 
 /* ══════════════════════════════════════════════════════════════
-   Expenses — mobile improvements
+   Expenses — purchase type auto-links to supplier debt
 ══════════════════════════════════════════════════════════════ */
 function Expenses({ data, refresh, isMobile }) {
-  const blank = {date:today(),amount:"",description:"salary"};
+  const blank = {date:today(),amount:"",description:"salary",supplier_id:"",note:""};
   const [form, setForm] = useState(blank);
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [t, toast] = useToast();
 
+  const suppliers = data.suppliers || [];
+
   const add = async () => {
     if (!form.amount) return toast("Enter amount","err");
+    if (form.description==="purchase" && !form.supplier_id)
+      return toast("Select which supplier this purchase is from","err");
     setBusy(true);
-    try { await sb.upsert("expenses",{...form,id:uid(),amount:+form.amount,created_at:Date.now()}); await refresh(); setForm(blank); setShow(false); toast("Expense saved ✓"); }
-    finally { setBusy(false); }
+    try {
+      const expense = {...form, id:uid(), amount:+form.amount, created_at:Date.now()};
+      await sb.upsert("expenses", expense);
+      // Re-fetch supplier live from DB to get the latest debt value, then increment
+      if (form.description==="purchase" && form.supplier_id) {
+        const rows = await sb.getAll("suppliers", `&id=eq.${encodeURIComponent(form.supplier_id)}`);
+        const sup = rows?.[0];
+        if (sup) {
+          await sb.upsert("suppliers", {...sup, debt: (sup.debt||0) + (+form.amount)});
+        } else {
+          toast("Supplier not found — debt not updated","warn");
+        }
+      }
+      await refresh(); setForm(blank); setShow(false);
+      toast(form.description==="purchase" ? "Purchase recorded & supplier debt updated ✓" : "Expense saved ✓");
+    } catch(e) {
+      toast("Save failed: " + e.message, "err");
+    } finally { setBusy(false); }
   };
 
-  const del = async id => { if (!confirm("Delete?")) return; await sb.del("expenses",id); await refresh(); toast("Deleted"); };
+  const del = async id => {
+    if (!confirm("Delete this expense?")) return;
+    try {
+      const expense = data.expenses.find(e=>e.id===id);
+      if (expense?.description==="purchase" && expense?.supplier_id) {
+        const rows = await sb.getAll("suppliers", `&id=eq.${encodeURIComponent(expense.supplier_id)}`);
+        const sup = rows?.[0];
+        if (sup) await sb.upsert("suppliers", {...sup, debt: Math.max(0, (sup.debt||0) - expense.amount)});
+      }
+      await sb.del("expenses", id); await refresh(); toast("Deleted");
+    } catch(e) { toast("Delete failed: " + e.message, "err"); }
+  };
 
   const monthExp   = data.expenses.filter(e=>e.date?.slice(0,7)===today().slice(0,7));
   const monthTotal = monthExp.reduce((a,e)=>a+e.amount,0);
@@ -1346,10 +1711,45 @@ function Expenses({ data, refresh, isMobile }) {
             <Fld label="Amount ₹ *" type="number" value={form.amount} onChange={v=>setForm(f=>({...f,amount:v}))}/>
             <div>
               <label style={C.lbl}>Type</label>
-              <select style={C.inp} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))}>
+              <select style={C.inp} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value,supplier_id:""}))}>
                 {["salary","rent","petrol","purchase","repair","other"].map(d=><option key={d}>{d}</option>)}
               </select>
             </div>
+            {/* Supplier picker — only shown for "purchase" */}
+            {form.description==="purchase"&&(
+              <div>
+                <label style={C.lbl}>Supplier *</label>
+                <select style={C.inp} value={form.supplier_id} onChange={e=>setForm(f=>({...f,supplier_id:e.target.value}))}>
+                  <option value="">— Select Supplier —</option>
+                  {suppliers.map(s=>(
+                    <option key={s.id} value={s.id}>{s.name}{s.gst_no?` · ${s.gst_no}`:""}{s.debt>0?` · Owes ${fmt(s.debt)}`:""}</option>
+                  ))}
+                </select>
+                {form.supplier_id&&(()=>{
+                  const sup=suppliers.find(s=>s.id===form.supplier_id);
+                  return sup&&(
+                    <div style={{marginTop:8,padding:"10px 12px",background:"#0d1117",borderRadius:8,fontSize:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:form.amount?6:0}}>
+                        <span style={{color:"#94a3b8"}}>Current debt to {sup.name}</span>
+                        <span style={{color:"#f87171",fontWeight:700}}>{fmt(sup.debt||0)}</span>
+                      </div>
+                      {form.amount&&(
+                        <>
+                          <div style={{display:"flex",justifyContent:"space-between",color:"#475569",fontSize:11}}>
+                            <span>+ This purchase</span>
+                            <span style={{color:"#fbbf24"}}>+{fmt(+form.amount)}</span>
+                          </div>
+                          <div style={{borderTop:"1px solid #1e293b",marginTop:6,paddingTop:6,display:"flex",justifyContent:"space-between"}}>
+                            <span style={{color:"#94a3b8",fontWeight:600}}>New total debt</span>
+                            <span style={{color:"#f87171",fontWeight:800}}>{fmt((sup.debt||0)+(+form.amount))}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
           <div style={{display:"flex",gap:8,marginTop:12}}>
             <button style={{...C.btnP,flex:1,justifyContent:"center",minHeight:46}} onClick={add} disabled={busy}><I n="check" s={14}/> {busy?"Saving…":"Save"}</button>
@@ -1361,30 +1761,40 @@ function Expenses({ data, refresh, isMobile }) {
       {/* Mobile card view */}
       {isMobile ? (
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>(
-            <div key={e.id} style={{...C.card,padding:"12px 14px",display:"flex",alignItems:"center",gap:12}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:600,fontSize:14,color:"#cbd5e1",textTransform:"capitalize"}}>{e.description}</div>
-                <div style={{color:"#64748b",fontSize:11,marginTop:2}}>{fmtDate(e.date)}</div>
+          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>{
+            const sup=e.supplier_id?suppliers.find(s=>s.id===e.supplier_id):null;
+            return (
+              <div key={e.id} style={{...C.card,padding:"12px 14px",display:"flex",alignItems:"center",gap:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,color:"#cbd5e1",textTransform:"capitalize"}}>{e.description}</div>
+                  <div style={{color:"#64748b",fontSize:11,marginTop:2}}>{fmtDate(e.date)}</div>
+                  {sup&&<div style={{color:"#94a3b8",fontSize:11,marginTop:1}}>From: {sup.name}{sup.gst_no?` · GST: ${sup.gst_no}`:""}</div>}
+                </div>
+                <div style={{fontWeight:700,fontSize:16,color:"#818cf8",flexShrink:0}}>{fmt(e.amount)}</div>
+                <button style={{...C.iBtn,color:"#f87171",padding:"8px 10px",flexShrink:0}} onClick={()=>del(e.id)}><I n="trash" s={15}/></button>
               </div>
-              <div style={{fontWeight:700,fontSize:16,color:"#818cf8",flexShrink:0}}>{fmt(e.amount)}</div>
-              <button style={{...C.iBtn,color:"#f87171",padding:"8px 10px",flexShrink:0}} onClick={()=>del(e.id)}><I n="trash" s={15}/></button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div style={C.tbl}>
-          <div style={{...C.tr,...C.th,gridTemplateColumns:"150px 1fr 110px 60px"}}>
-            <span>Date</span><span>Type</span><span>Amount</span><span>Del</span>
+          <div style={{...C.tr,...C.th,gridTemplateColumns:"130px 1fr 1.5fr 110px 60px"}}>
+            <span>Date</span><span>Type</span><span>Supplier</span><span>Amount</span><span>Del</span>
           </div>
-          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>(
-            <div key={e.id} style={{...C.tr,gridTemplateColumns:"150px 1fr 110px 60px"}}>
-              <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(e.date)}</span>
-              <span style={{textTransform:"capitalize",color:"#cbd5e1"}}>{e.description}</span>
-              <span style={{color:"#818cf8",fontWeight:600}}>{fmt(e.amount)}</span>
-              <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(e.id)}><I n="trash" s={13}/></button>
-            </div>
-          ))}
+          {data.expenses.length===0?<MT text="No expenses yet"/>:data.expenses.slice(0,150).map(e=>{
+            const sup=e.supplier_id?suppliers.find(s=>s.id===e.supplier_id):null;
+            return (
+              <div key={e.id} style={{...C.tr,gridTemplateColumns:"130px 1fr 1.5fr 110px 60px"}}>
+                <span style={{color:"#94a3b8",fontSize:12}}>{fmtDate(e.date)}</span>
+                <span style={{textTransform:"capitalize",color:"#cbd5e1"}}>{e.description}</span>
+                <span style={{color:sup?"#94a3b8":"#334155",fontSize:12}}>
+                  {sup?<>{sup.name}{sup.gst_no&&<span style={{color:"#fbbf24",marginLeft:5,fontFamily:"monospace",fontSize:11}}>{sup.gst_no}</span>}</>:"—"}
+                </span>
+                <span style={{color:"#818cf8",fontWeight:600}}>{fmt(e.amount)}</span>
+                <button style={{...C.iBtn,color:"#f87171"}} onClick={()=>del(e.id)}><I n="trash" s={13}/></button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1394,7 +1804,7 @@ function Expenses({ data, refresh, isMobile }) {
 /* ══════════════════════════════════════════════════════════════
    Reports — mobile card view for sales list
 ══════════════════════════════════════════════════════════════ */
-function Reports({ data, refresh, isMobile }) {
+function Reports({ data, refresh, shopGST, isMobile }) {
   const [range,  setRange]  = useState("today");
   const [from,   setFrom]   = useState(today());
   const [to,     setTo]     = useState(today());
@@ -1433,7 +1843,7 @@ function Reports({ data, refresh, isMobile }) {
     await refresh(); toast("Bill cancelled. Stock restored ✓");
   };
 
-  if (reprint) return <Receipt rcpt={reprint} products={data.products} onClose={()=>setReprint(null)}/>;
+  if (reprint) return <Receipt rcpt={reprint} products={data.products} shopGST={shopGST} onClose={()=>setReprint(null)}/>;
 
   return (
     <div style={C.pg}>
@@ -1810,7 +2220,7 @@ function ImportData({ data, refresh, isMobile }) {
    Styles
 ══════════════════════════════════════════════════════════════ */
 const C = {
-  app:    {display:"flex",height:"100vh",background:"#060a10",fontFamily:"'DM Sans',system-ui,sans-serif",overflow:"hidden"},
+  app:    {display:"flex",height:"100vh",width:"100%",background:"#060a10",fontFamily:"'DM Sans',system-ui,sans-serif",overflow:"hidden"},
   sb:     {width:200,background:"#080c14",borderRight:"1px solid #1a2235",display:"flex",flexDirection:"column",padding:"14px 10px",flexShrink:0},
   brand:  {display:"flex",alignItems:"center",gap:10,marginBottom:22,paddingLeft:4},
   bIcon:  {width:32,height:32,background:"linear-gradient(135deg,#f59e0b,#b45309)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:16,color:"#0d1117",flexShrink:0},
@@ -1819,8 +2229,8 @@ const C = {
   nav:    {display:"flex",alignItems:"center",gap:8,padding:"9px 10px",background:"none",border:"none",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:500,textAlign:"left",width:"100%",minHeight:38},
   navA:   {background:"rgba(245,158,11,.12)",color:"#f59e0b"},
   sbFoot: {paddingTop:12,borderTop:"1px solid #1a2235"},
-  main:   {flex:1,overflow:"hidden",display:"flex",flexDirection:"column"},
-  pg:     {maxWidth:960,margin:"0 auto"},
+  main: {flex:1,minWidth:0,overflow:"hidden",display:"flex",flexDirection:"column"},
+  pg:     {maxWidth:1400,margin:"0 auto",width:"100%"},
   h1:     {fontSize:20,fontWeight:800,color:"#f0f6ff",marginBottom:16,letterSpacing:-.5},
   phdr:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16},
   g4:     {display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18},
