@@ -147,16 +147,16 @@ export function Fld({ label, value, onChange, type="text", ph="", readOnly }) {
   );
 }
 export function ST({ children, style:sx }) {
-  return <div style={{fontWeight:700,color:"#94a3b8",fontSize:10,textTransform:"uppercase",letterSpacing:1,marginBottom:12,...sx}}>{children}</div>;
+  return <div style={{fontWeight:700,color:"#8fa4bc",fontSize:10,textTransform:"uppercase",letterSpacing:1,marginBottom:12,...sx}}>{children}</div>;
 }
 export function MT({ text }) {
-  return <div style={{color:"#64748b",textAlign:"center",padding:"28px 0",fontSize:13}}>{text}</div>;
+  return <div style={{color:"#71849b",textAlign:"center",padding:"28px 0",fontSize:13}}>{text}</div>;
 }
 export function SRow({ l, v, c, b }) {
   return (
     <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,color:"#94a3b8"}}>
       <span>{l}</span>
-      <span style={{fontWeight:b?700:500,color:c||"#e2e8f0"}}>{v}</span>
+      <span style={{fontWeight:b?700:500,color:c||"#e7edf5"}}>{v}</span>
     </div>
   );
 }
@@ -165,7 +165,7 @@ export function StatC({ label, val, sub, acc }) {
     <div style={{...C.card,borderTop:`3px solid ${acc}`,padding:"14px 16px"}}>
       <div style={{color:"#94a3b8",fontSize:10,marginBottom:4}}>{label}</div>
       <div style={{fontSize:20,fontWeight:800,color:acc,letterSpacing:-1}}>{val}</div>
-      <div style={{color:"#64748b",fontSize:10,marginTop:3}}>{sub}</div>
+      <div style={{color:"#71849b",fontSize:10,marginTop:3}}>{sub}</div>
     </div>
   );
 }
@@ -177,7 +177,7 @@ export function useToast() {
 }
 export function Toast({ t }) {
   if (!t) return null;
-  const bg = t.type==="err"?"#ef4444":t.type==="warn"?"#f59e0b":"#10b981";
+  const bg = t.type==="err"?"#ef4444":t.type==="warn"?"#f59e0b":"#22c55e";
   return (
     <div style={{position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",background:bg,color:"#fff",padding:"12px 24px",borderRadius:12,fontWeight:600,fontSize:14,zIndex:9999,boxShadow:"0 4px 24px rgba(0,0,0,.6)",whiteSpace:"nowrap",maxWidth:"90vw"}}>
       {t.msg}
@@ -195,35 +195,35 @@ export function useIsMobile() {
    Styles
 ══════════════════════════════════════════════════════════════ */
 export const C = {
-  app:    {display:"flex",height:"100vh",width:"100%",background:"#060a10",fontFamily:"'DM Sans',system-ui,sans-serif",overflow:"hidden"},
-  sb:     {width:200,background:"#080c14",borderRight:"1px solid #1a2235",display:"flex",flexDirection:"column",padding:"14px 10px",flexShrink:0},
+  app:    {display:"flex",height:"100vh",width:"100%",background:"#061426",fontFamily:"'DM Sans',system-ui,sans-serif",overflow:"hidden"},
+  sb:     {width:200,background:"#07172b",borderRight:"1px solid #19385a",display:"flex",flexDirection:"column",padding:"14px 10px",flexShrink:0},
   brand:  {display:"flex",alignItems:"center",gap:10,marginBottom:22,paddingLeft:4},
-  bIcon:  {width:32,height:32,background:"linear-gradient(135deg,#f59e0b,#b45309)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:16,color:"#0d1117",flexShrink:0},
-  bName:  {fontWeight:900,fontSize:13,color:"#f0f6ff",letterSpacing:1},
-  bSub:   {fontSize:9,color:"#334155",letterSpacing:.5},
-  nav:    {display:"flex",alignItems:"center",gap:8,padding:"9px 10px",background:"none",border:"none",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:500,textAlign:"left",width:"100%",minHeight:38},
-  navA:   {background:"rgba(245,158,11,.12)",color:"#f59e0b"},
-  sbFoot: {paddingTop:12,borderTop:"1px solid #1a2235"},
+  bIcon:  {width:32,height:32,background:"linear-gradient(135deg,#1976d2,#125a9f)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:16,color:"#f5f7fa",flexShrink:0},
+  bName:  {fontWeight:900,fontSize:13,color:"#f5f7fa",letterSpacing:1},
+  bSub:   {fontSize:9,color:"#657b95",letterSpacing:.5},
+  nav:    {display:"flex",alignItems:"center",gap:8,padding:"9px 10px",background:"none",border:"none",borderRadius:8,color:"#71849b",cursor:"pointer",fontSize:12,fontWeight:500,textAlign:"left",width:"100%",minHeight:38},
+  navA:   {background:"rgba(25,118,210,.14)",color:"#3b82f6"},
+  sbFoot: {paddingTop:12,borderTop:"1px solid #19385a"},
   main:   {flex:1,minWidth:0,overflow:"hidden",display:"flex",flexDirection:"column"},
   pg:     {maxWidth:1400,margin:"0 auto",width:"100%"},
-  h1:     {fontSize:20,fontWeight:800,color:"#f0f6ff",marginBottom:16,letterSpacing:-.5},
+  h1:     {fontSize:20,fontWeight:800,color:"#f5f7fa",marginBottom:16,letterSpacing:-.5},
   phdr:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16},
   g4:     {display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18},
   g3:     {display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10},
   two:    {display:"grid",gridTemplateColumns:"1fr 1fr",gap:14},
-  card:   {background:"#08101e",border:"1px solid #1a2235",borderRadius:12,padding:"16px 18px",marginBottom:0},
-  row:    {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #0d1521"},
-  alertW: {display:"flex",gap:8,alignItems:"flex-start",background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.25)",borderRadius:8,padding:"10px 12px",color:"#fbbf24",fontSize:13},
-  tbl:    {background:"#08101e",border:"1px solid #1a2235",borderRadius:12,overflow:"hidden"},
-  tr:     {display:"grid",gap:8,padding:"11px 14px",borderBottom:"1px solid #0d1521",fontSize:13,alignItems:"center",color:"#cbd5e1"},
-  th:     {color:"#4a5c74",fontSize:10,textTransform:"uppercase",letterSpacing:1,fontWeight:700,background:"#050c17"},
-  lbl:    {display:"block",fontSize:11,color:"#64748b",marginBottom:5,textTransform:"uppercase",letterSpacing:.5},
-  inp:    {width:"100%",background:"#0d1521",border:"1px solid #1a2235",borderRadius:8,padding:"10px 12px",color:"#f0f6ff",fontSize:14,outline:"none",boxSizing:"border-box"},
-  srch:   {width:"100%",background:"#08101e",border:"1px solid #1a2235",borderRadius:10,padding:"11px 14px",color:"#f0f6ff",fontSize:14,outline:"none",marginBottom:14,boxSizing:"border-box"},
-  btnP:   {display:"flex",alignItems:"center",gap:6,background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#0d1117",border:"none",borderRadius:9,padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
-  btnG:   {display:"flex",alignItems:"center",gap:6,background:"transparent",color:"#94a3b8",border:"1px solid #1e293b",borderRadius:9,padding:"9px 14px",fontWeight:500,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
-  iBtn:   {background:"transparent",border:"1px solid #1a2235",borderRadius:7,padding:"6px 8px",color:"#64748b",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
-  splash: {display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#060a10"},
-  logo:   {fontSize:48,fontWeight:900,letterSpacing:8,color:"#f59e0b",marginBottom:6},
-  spinner:{width:28,height:28,border:"3px solid #1a2235",borderTop:"3px solid #f59e0b",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"18px auto"},
+  card:   {background:"#0b1d35",border:"1px solid #19385a",borderRadius:12,padding:"16px 18px",marginBottom:0},
+  row:    {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #153453"},
+  alertW: {display:"flex",gap:8,alignItems:"flex-start",background:"rgba(25,118,210,.07)",border:"1px solid rgba(59,130,246,.32)",borderRadius:8,padding:"10px 12px",color:"#f59e0b",fontSize:13},
+  tbl:    {background:"#0b1d35",border:"1px solid #19385a",borderRadius:12,overflow:"hidden"},
+  tr:     {display:"grid",gap:8,padding:"11px 14px",borderBottom:"1px solid #153453",fontSize:13,alignItems:"center",color:"#d7e0eb"},
+  th:     {color:"#7189a5",fontSize:10,textTransform:"uppercase",letterSpacing:1,fontWeight:700,background:"#07162a"},
+  lbl:    {display:"block",fontSize:11,color:"#71849b",marginBottom:5,textTransform:"uppercase",letterSpacing:.5},
+  inp:    {width:"100%",background:"#0c203b",border:"1px solid #19385a",borderRadius:8,padding:"10px 12px",color:"#f5f7fa",fontSize:14,outline:"none",boxSizing:"border-box"},
+  srch:   {width:"100%",background:"#0b1d35",border:"1px solid #19385a",borderRadius:10,padding:"11px 14px",color:"#f5f7fa",fontSize:14,outline:"none",marginBottom:14,boxSizing:"border-box"},
+  btnP:   {display:"flex",alignItems:"center",gap:6,background:"linear-gradient(135deg,#1976d2,#155fa8)",color:"#f5f7fa",border:"none",borderRadius:9,padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
+  btnG:   {display:"flex",alignItems:"center",gap:6,background:"transparent",color:"#94a3b8",border:"1px solid #2a4d73",borderRadius:9,padding:"9px 14px",fontWeight:500,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"},
+  iBtn:   {background:"transparent",border:"1px solid #19385a",borderRadius:7,padding:"6px 8px",color:"#71849b",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
+  splash: {display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#061426"},
+  logo:   {fontSize:48,fontWeight:900,letterSpacing:8,color:"#3b82f6",marginBottom:6},
+  spinner:{width:28,height:28,border:"3px solid #19385a",borderTop:"3px solid #3b82f6",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"18px auto"},
 };
