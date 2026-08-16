@@ -50,9 +50,7 @@
   }
 }
 
-body {
-  margin: 0;
-}
+body { margin: 0; }
 
 #root {
   width: 1126px;
@@ -77,23 +75,16 @@ h1 {
   font-size: 56px;
   letter-spacing: -1.68px;
   margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+  @media (max-width: 1024px) { font-size: 36px; margin: 20px 0; }
 }
 h2 {
   font-size: 24px;
   line-height: 118%;
   letter-spacing: -0.24px;
   margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+  @media (max-width: 1024px) { font-size: 20px; }
 }
-p {
-  margin: 0;
-}
+p { margin: 0; }
 
 code,
 .counter {
@@ -125,9 +116,7 @@ code {
   --stove-primary-bg: rgba(25,118,210,.14);
 }
 
-body {
-  background: var(--stove-bg) !important;
-}
+body { background: var(--stove-bg) !important; }
 
 /* Main surfaces */
 [style*="#060a10"] { background: var(--stove-bg) !important; }
@@ -177,14 +166,13 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(59,130,246,.12) !important;
 }
 
-/* Semantic success */
+/* Semantic colors */
 [style*="#10b981"] { color: #22c55e !important; }
 [style*="#22c55e"] { color: #22c55e !important; }
-[style*="#fbbf24"] { color: #f59e0b !important; }
 [style*="#f87171"] { color: #ef4444 !important; }
 [style*="#ef4444"] { color: #ef4444 !important; }
 
-/* Strong overrides for remaining hard-coded orange in the current UI */
+/* Strong overrides for hard-coded orange authored as hex */
 html body [style*="#f59e0b"] { color: #3b82f6 !important; }
 html body [style*="#d97706"] { color: #3b82f6 !important; background: #155fa8 !important; }
 html body [style*="#b45309"] { background: #125a9f !important; }
@@ -198,6 +186,35 @@ html body [style*="rgba(245,158,11,.08)"] { background: rgba(25,118,210,.10) !im
 html body [style*="rgba(245,158,11,.06)"] { background: rgba(25,118,210,.07) !important; }
 html body [style*="rgba(245,158,11,.12)"] { background: rgba(25,118,210,.14) !important; }
 html body [style*="rgba(245,158,11,.25)"] { border-color: rgba(59,130,246,.32) !important; }
-html body input:focus,
-html body select:focus,
-html body textarea:focus { border-color: #3b82f6 !important; }
+
+/* React renders inline colors as RGB in the DOM; catch those everywhere. */
+html body [style*="rgb(245, 158, 11)"] { color: #3b82f6 !important; }
+html body [style*="rgb(251, 191, 36)"] { color: #3b82f6 !important; }
+html body [style*="rgb(217, 119, 6)"] { color: #2b6fbd !important; }
+html body [style*="rgb(180, 83, 9)"] { color: #215d9d !important; }
+html body [style*="rgb(146, 64, 14)"] { color: #1b528d !important; }
+
+html body [style*="background: rgb(245, 158, 11)"] { background: #1976d2 !important; }
+html body [style*="background: rgb(217, 119, 6)"] { background: #155fa8 !important; }
+html body [style*="background: rgb(180, 83, 9)"] { background: #125a9f !important; }
+html body [style*="background: rgb(146, 64, 14)"] { background: #0f4f89 !important; }
+html body [style*="linear-gradient(135deg, rgb(245, 158, 11)"] { background: linear-gradient(135deg,#1976d2,#125a9f) !important; }
+html body [style*="linear-gradient(90deg, transparent, rgb(245, 158, 11)"] { background: linear-gradient(90deg,transparent,#3b82f6,transparent) !important; }
+html body [style*="box-shadow: 0 0 10px rgb(245, 158, 11)"] { box-shadow: 0 0 10px #3b82f6 !important; }
+html body [style*="box-shadow: 0 0 48px rgba(245, 158, 11, 0.25)"] { box-shadow: 0 0 48px rgba(59,130,246,.24) !important; }
+
+html body [style*="border-top: 3px solid rgb(245, 158, 11)"] { border-top-color: #3b82f6 !important; }
+html body [style*="border-bottom: 2px solid rgb(245, 158, 11)"] { border-bottom-color: #3b82f6 !important; }
+html body [style*="border-color: rgba(245, 158, 11, 0.3)"] { border-color: rgba(59,130,246,.30) !important; }
+html body [style*="border-color: rgba(245, 158, 11, 0.25)"] { border-color: rgba(59,130,246,.32) !important; }
+html body [style*="background: rgba(245, 158, 11, 0.1)"] { background: rgba(25,118,210,.10) !important; }
+html body [style*="background: rgba(245, 158, 11, 0.08)"] { background: rgba(25,118,210,.10) !important; }
+html body [style*="background: rgba(245, 158, 11, 0.06)"] { background: rgba(25,118,210,.07) !important; }
+
+/* SVG colors used by charts/scanners */
+html body [stroke="#f59e0b"] { stroke: #3b82f6 !important; }
+html body [fill="#f59e0b"] { fill: #3b82f6 !important; }
+html body [stroke="#fbbf24"] { stroke: #3b82f6 !important; }
+html body [fill="#fbbf24"] { fill: #3b82f6 !important; }
+html body [stroke="#d97706"] { stroke: #155fa8 !important; }
+html body [fill="#d97706"] { fill: #155fa8 !important; }
