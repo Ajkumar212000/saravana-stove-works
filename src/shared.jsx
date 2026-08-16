@@ -208,7 +208,6 @@ export function getSession() {
 /* Existing login/change-password callers are redirected through
    Supabase Auth instead of the old settings-table password check. */
 export async function getDBCreds() {
-  const session = readAuthSession();
   let username = getSession();
   if (!username && typeof document !== "undefined") {
     const field = document.querySelector('input[placeholder="admin"]');
@@ -218,13 +217,12 @@ export async function getDBCreds() {
 }
 
 export async function hashPassword(password) {
-  const session = readAuthSession();
   let email = getSession();
   if (typeof document !== "undefined") {
     const field = document.querySelector('input[placeholder="admin"]');
     if (field?.value?.trim()) email = field.value.trim();
   }
-  if (!email.includes("@")) throw new Error("Please use your Supabase Auth email address.");
+  if (!email.includes("@")) throw new Error("Please use the email address of your Supabase Auth user.");
   await signInWithSupabase(email, password);
   return AUTH_MARKER;
 }
@@ -233,6 +231,21 @@ export const IS_HASH = s => s === AUTH_MARKER;
 
 export async function saveDBCreds(c) {
   return updateAuthPassword(c.password);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Shop settings — authentication is handled by Supabase Auth;
+   these functions are only for the application's GST setting.
+══════════════════════════════════════════════════════════════ */
+export async function getShopGST() {
+  try {
+    const rows = await sb.getAll("settings", "&id=eq.shop_info");
+    return rows?.[0]?.gst_no || "";
+  } catch { return ""; }
+}
+
+export async function saveShopGST(gst_no) {
+  await sb.upsert("settings", { id:"shop_info", gst_no });
 }
 
 /* ══════════════════════════════════════════════════════════════
