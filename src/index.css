@@ -109,3 +109,77 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Saravana Stove Works visual theme: color-only override */
+:root {
+  --stove-bg: #0b0b0c;
+  --stove-panel: #151311;
+  --stove-panel-2: #1b1815;
+  --stove-border: #2d2924;
+  --stove-border-soft: #3a332c;
+  --stove-text: #f5f2ed;
+  --stove-muted: #a8a29b;
+  --stove-muted-2: #817a72;
+  --stove-primary: #c8742f;
+  --stove-primary-2: #e09a52;
+  --stove-primary-bg: rgba(200,116,47,.11);
+}
+
+body {
+  background: var(--stove-bg) !important;
+}
+
+/* Main dark surfaces */
+[style*="#060a10"] { background: var(--stove-bg) !important; }
+[style*="#080c14"] { background: #12100f !important; }
+[style*="#08101e"] { background: var(--stove-panel) !important; }
+[style*="#0a0f1a"] { background: var(--stove-panel) !important; }
+[style*="#0d1521"] { background: #11100f !important; }
+[style*="#050c17"] { background: #100f0e !important; }
+[style*="#1a2235"] { border-color: var(--stove-border) !important; }
+[style*="#1e293b"] { border-color: var(--stove-border-soft) !important; }
+[style*="#0d1521"] { border-color: #25211d !important; }
+
+/* Brand and primary actions */
+[style*="#f59e0b"] { color: var(--stove-primary) !important; }
+[style*="#b45309"] { background: #8d461d !important; }
+[style*="#92400e"] { background: #8d461d !important; }
+[style*="#d97706"] { background: #a6531f !important; }
+[style*="linear-gradient(135deg,#f59e0b,#b45309)"] { background: linear-gradient(135deg,#c8742f,#8d461d) !important; }
+[style*="linear-gradient(135deg,#f59e0b,#d97706)"] { background: linear-gradient(135deg,#c8742f,#a6531f) !important; }
+[style*="linear-gradient(135deg,#f59e0b,#92400e)"] { background: linear-gradient(135deg,#c8742f,#8d461d) !important; }
+[style*="rgba(245,158,11,.12)"] { background: var(--stove-primary-bg) !important; }
+[style*="rgba(245,158,11,.08)"] { background: rgba(200,116,47,.09) !important; }
+[style*="rgba(245,158,11,.06)"] { background: rgba(200,116,47,.07) !important; }
+[style*="rgba(245,158,11,.25)"] { border-color: rgba(200,116,47,.28) !important; }
+
+/* Text hierarchy */
+[style*="#f0f6ff"] { color: var(--stove-text) !important; }
+[style*="#e2e8f0"] { color: #e7e0d7 !important; }
+[style*="#cbd5e1"] { color: #d7d0c8 !important; }
+[style*="#94a3b8"] { color: var(--stove-muted) !important; }
+[style*="#64748b"] { color: var(--stove-muted-2) !important; }
+[style*="#475569"] { color: #706960 !important; }
+[style*="#4a5c74"] { color: #756d64 !important; }
+[style*="#334155"] { color: #706960 !important; }
+
+/* Form controls */
+[style*="background:#0d1521"] { background: #11100f !important; }
+[style*="border:1px solid #1a2235"] { border-color: var(--stove-border) !important; }
+[style*="border:1px solid #1e293b"] { border-color: var(--stove-border-soft) !important; }
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--stove-primary) !important;
+  box-shadow: 0 0 0 3px rgba(200,116,47,.10) !important;
+}
+
+/* Toasts retain semantic status meaning, but soften the warning amber */
+[style*="background:#f59e0b"] { background: #c8742f !important; }
+
+/* Primary success/warning/error shades remain semantic */
+[style*="#10b981"] { color: #34c77b !important; }
+[style*="#22c55e"] { color: #35c978 !important; }
+
+/* Login red states stay red; only the surrounding dark theme changes */
