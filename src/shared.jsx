@@ -4,32 +4,236 @@ import { useState, useEffect } from "react";
    Supabase Config
 ══════════════════════════════════════════════════════════════ */
 const SUPABASE_URL = "https://wbomikniccwwbdxujhcc.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indib21pa25pY2N3d2JkeHVqaGNjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwMzQ0NjgsImV4cCI6MjA5MDYxMDQ2OH0.SzwcSJaO28QLHvn4Zq7YMzApY-z6nWdZXKQhS5O5QpY";
-const HDR  = { apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json", Prefer:"return=representation" };
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkFub24iLCJpYXQiOjE3NzUwMzQ0NjgsImV4cCI6MjA5MDYxMDQ2OH0.SzwcSJaO28QLHvn4Zq7YMzApY-z6nWdZXKQhS5O5QpY";
+const AUTH_STORAGE_KEY = "stow_supabase_session";
+const LOGIN_ID_KEY = "stow_login_identifier";
 const BASE = `${SUPABASE_URL}/rest/v1`;
+const AUTH_BASE = `${SUPABASE_URL}/auth/v1`;
+const AUTH_MARKER = "auth-session-ok-00000000000000000000000000000000";
+
+function readAuthSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function writeAuthSession(session) {
+  if (!session?.access_token) return;
+  const expiresAt = session.expires_at
+    ? session.expires_at * 1000
+    : Date.now() + Number(session.expires_in || 3600) * 1000;
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token || "",
+    expires_at: expiresAt,
+    user: session.user || null,
+  }));
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  localStorage.removeItem("stow_session");
+}
+
+async function authFetch(path, options = {}) {
+  const headers = {
+    apikey: SUPABASE_KEY,
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  const r = await fetch(`${AUTH_BASE}${path}`, { ...options, headers });
+  const body = await r.text();
+  let data = null;
+  try { data = body ? JSON.parse(body) : null; } catch { data = { message: body }; }
+  if (!r.ok) {
+    throw new Error(data?.msg || data?.message || data?.error_description || "Authentication request failed.");
+  }
+  return data;
+}
+
+let refreshPromise = null;
+
+async function refreshAuthSession() {
+  const current = readAuthSession();
+  if (!current?.refresh_token) return null;
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = authFetch("/token?grant_type=refresh_token", {
+    method: "POST",
+    body: JSON.stringify({ refresh_token: current.refresh_token }),
+  }).then(next => {
+    writeAuthSession(next);
+    return next;
+  }).catch(() => {
+    clearStoredAuth();
+    return null;
+  }).finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+async function getAccessToken() {
+  const current = readAuthSession();
+  if (!current?.access_token) return null;
+  if (!current.expires_at || current.expires_at > Date.now() + 60_000) return current.access_token;
+  const refreshed = await refreshAuthSession();
+  return refreshed?.access_token || null;
+}
+
+async function authHeaders() {
+  const token = await getAccessToken();
+  return {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${token || SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+    Prefer: "return=representation",
+  };
+}
 
 export const sb = {
   async getAll(table, qs="") {
-    const r = await fetch(`${BASE}/${table}?select=*${qs}`, { headers:HDR });
+    const r = await fetch(`${BASE}/${table}?select=*${qs}`, { headers:await authHeaders() });
     if (!r.ok) throw new Error(`[${table}] ${await r.text()}`);
     return r.json();
   },
   async upsert(table, record) {
-    const r = await fetch(`${BASE}/${table}`, { method:"POST", headers:{...HDR,Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(record) });
+    const r = await fetch(`${BASE}/${table}`, {
+      method:"POST",
+      headers:{...(await authHeaders()),Prefer:"resolution=merge-duplicates,return=representation"},
+      body:JSON.stringify(record)
+    });
     if (!r.ok) throw new Error(`[${table}] ${await r.text()}`);
     return r.json();
   },
   async upsertMany(table, records) {
     if (!records.length) return;
-    const r = await fetch(`${BASE}/${table}`, { method:"POST", headers:{...HDR,Prefer:"resolution=merge-duplicates,return=representation"}, body:JSON.stringify(records) });
+    const r = await fetch(`${BASE}/${table}`, {
+      method:"POST",
+      headers:{...(await authHeaders()),Prefer:"resolution=merge-duplicates,return=representation"},
+      body:JSON.stringify(records)
+    });
     if (!r.ok) throw new Error(`[${table}] ${await r.text()}`);
     return r.json();
   },
   async del(table, id) {
-    const r = await fetch(`${BASE}/${table}?id=eq.${encodeURIComponent(id)}`, { method:"DELETE", headers:HDR });
+    const r = await fetch(`${BASE}/${table}?id=eq.${encodeURIComponent(id)}`, {
+      method:"DELETE",
+      headers:await authHeaders()
+    });
     if (!r.ok) throw new Error(`[${table}] ${await r.text()}`);
   },
 };
+
+/* ══════════════════════════════════════════════════════════════
+   Supabase Auth
+══════════════════════════════════════════════════════════════ */
+export async function signInWithSupabase(email, password) {
+  const identifier = String(email || "").trim();
+  if (!identifier.includes("@")) {
+    throw new Error("Please use the email address of your Supabase Auth user.");
+  }
+  if (!password) throw new Error("Password is required.");
+
+  const session = await authFetch("/token?grant_type=password", {
+    method:"POST",
+    body:JSON.stringify({ email:identifier, password }),
+  });
+  writeAuthSession(session);
+  localStorage.setItem(LOGIN_ID_KEY, identifier);
+  return session.user;
+}
+
+export async function restoreSupabaseSession() {
+  const current = readAuthSession();
+  if (!current) return null;
+  if (current.expires_at && current.expires_at > Date.now() + 60_000) return current.user || null;
+  const refreshed = await refreshAuthSession();
+  return refreshed?.user || null;
+}
+
+export async function updateAuthPassword(password) {
+  if (!password || password.length < 8) throw new Error("Password must be at least 8 characters.");
+  const token = await getAccessToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const data = await authFetch("/user", {
+    method:"PUT",
+    headers:{ Authorization:`Bearer ${token}` },
+    body:JSON.stringify({ password }),
+  });
+  const current = readAuthSession();
+  if (data?.user) writeAuthSession({
+    access_token:current.access_token,
+    refresh_token:current.refresh_token,
+    expires_at:current.expires_at ? Math.floor(current.expires_at/1000) : undefined,
+    user:data.user,
+  });
+  return data?.user;
+}
+
+export async function signOutSupabase() {
+  const current = readAuthSession();
+  if (current?.access_token) {
+    try {
+      await authFetch("/logout", {
+        method:"POST",
+        headers:{ Authorization:`Bearer ${current.access_token}` },
+      });
+    } catch { /* local cleanup still occurs */ }
+  }
+  clearStoredAuth();
+}
+
+export function isLoggedIn() {
+  const session = readAuthSession();
+  return Boolean(session?.access_token || session?.refresh_token);
+}
+
+/* Kept for compatibility with existing App.jsx while moving the
+   real authentication boundary to Supabase Auth. */
+export function setSession() {
+  // Supabase Auth session is already persisted by signInWithSupabase().
+}
+
+export function clearSession() {
+  clearStoredAuth();
+}
+
+export function getSession() {
+  const session = readAuthSession();
+  const user = session?.user;
+  return user?.user_metadata?.username || user?.email || localStorage.getItem(LOGIN_ID_KEY) || "";
+}
+
+/* Existing login/change-password callers are redirected through
+   Supabase Auth instead of the old settings-table password check. */
+export async function getDBCreds() {
+  const session = readAuthSession();
+  let username = getSession();
+  if (!username && typeof document !== "undefined") {
+    const field = document.querySelector('input[placeholder="admin"]');
+    username = field?.value?.trim() || "";
+  }
+  return { id:"supabase-auth", username, password:AUTH_MARKER };
+}
+
+export async function hashPassword(password) {
+  const session = readAuthSession();
+  let email = getSession();
+  if (typeof document !== "undefined") {
+    const field = document.querySelector('input[placeholder="admin"]');
+    if (field?.value?.trim()) email = field.value.trim();
+  }
+  if (!email.includes("@")) throw new Error("Please use your Supabase Auth email address.");
+  await signInWithSupabase(email, password);
+  return AUTH_MARKER;
+}
+
+export const IS_HASH = s => s === AUTH_MARKER;
+
+export async function saveDBCreds(c) {
+  return updateAuthPassword(c.password);
+}
 
 /* ══════════════════════════════════════════════════════════════
    Helpers
@@ -39,64 +243,6 @@ export const today   = () => new Date().toISOString().slice(0,10);
 export const fmt     = n  => `₹${Number(n||0).toFixed(2)}`;
 export const fmtDate = d  => { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}); } catch { return d; }};
 export const toISO   = d  => { if (!d) return today(); if (d instanceof Date) return d.toISOString().slice(0,10); if (typeof d==="number") return new Date(Math.round((d-25569)*86400*1000)).toISOString().slice(0,10); return String(d).slice(0,10); };
-
-/* ══════════════════════════════════════════════════════════════
-   Auth helpers
-══════════════════════════════════════════════════════════════ */
-export async function hashPassword(pw) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pw));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-export const IS_HASH = s => typeof s==="string" && /^[0-9a-f]{64}$/.test(s);
-export const SESSION_TTL = 8 * 60 * 60 * 1000;
-
-export async function getDBCreds() {
-  try {
-    const rows = await sb.getAll("settings", "&id=eq.credentials");
-    if (rows && rows.length > 0) return rows[0];
-    const hashed = await hashPassword("admin123");
-    const def = { id:"credentials", username:"admin", password:hashed };
-    await sb.upsert("settings", def);
-    return def;
-  } catch {
-    return { id:"credentials", username:"admin", password:null };
-  }
-}
-export async function saveDBCreds(c) {
-  const hashed = await hashPassword(c.password);
-  await sb.upsert("settings", { id:"credentials", username:c.username, password:hashed });
-}
-export async function getShopGST() {
-  try {
-    const rows = await sb.getAll("settings", "&id=eq.shop_info");
-    return rows?.[0]?.gst_no || "";
-  } catch { return ""; }
-}
-export async function saveShopGST(gst_no) {
-  await sb.upsert("settings", { id:"shop_info", gst_no });
-}
-
-export function isLoggedIn() {
-  try {
-    const raw = localStorage.getItem("stow_session");
-    if (!raw) return false;
-    const { exp } = JSON.parse(atob(raw));
-    return Date.now() < exp;
-  } catch { return false; }
-}
-export function setSession(u) {
-  const token = btoa(JSON.stringify({ user:u, exp:Date.now()+SESSION_TTL, nonce:crypto.randomUUID() }));
-  localStorage.setItem("stow_session", token);
-}
-export function clearSession() { localStorage.removeItem("stow_session"); }
-export function getSession() {
-  try {
-    const raw = localStorage.getItem("stow_session");
-    if (!raw) return "";
-    const { user, exp } = JSON.parse(atob(raw));
-    return Date.now() < exp ? user : "";
-  } catch { return ""; }
-}
 
 /* ══════════════════════════════════════════════════════════════
    Icons
@@ -213,7 +359,7 @@ export const C = {
   two:    {display:"grid",gridTemplateColumns:"1fr 1fr",gap:14},
   card:   {background:"#0b1d35",border:"1px solid #19385a",borderRadius:12,padding:"16px 18px",marginBottom:0},
   row:    {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #153453"},
-  alertW: {display:"flex",gap:8,alignItems:"flex-start",background:"rgba(25,118,210,.07)",border:"1px solid rgba(59,130,246,.32)",borderRadius:8,padding:"10px 12px",color:"#f59e0b",fontSize:13},
+  alertW: {display:"flex",gap:8,alignItems:"flex-start",background:"rgba(25,118,210,.07)",border:"1px solid rgba(59,130,246,.32)",borderRadius:8,padding:"10px 12px",color:"#3b82f6",fontSize:13},
   tbl:    {background:"#0b1d35",border:"1px solid #19385a",borderRadius:12,overflow:"hidden"},
   tr:     {display:"grid",gap:8,padding:"11px 14px",borderBottom:"1px solid #153453",fontSize:13,alignItems:"center",color:"#d7e0eb"},
   th:     {color:"#7189a5",fontSize:10,textTransform:"uppercase",letterSpacing:1,fontWeight:700,background:"#07162a"},
